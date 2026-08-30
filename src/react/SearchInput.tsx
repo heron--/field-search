@@ -1,38 +1,16 @@
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
 import type { ParseError } from "../parser";
-import type { QueryNode } from "../ast";
-import { Chip } from "./Chip";
-import { Suggestions, type SuggestionItem } from "./Suggestions";
+import { Chip, type ChipClassNames } from "./Chip";
+import { Suggestions, type SuggestionClassNames } from "./Suggestions";
+import type { Segment } from "./segments";
 import {
-  caretTarget,
-  segmentWithErrors,
-  type CaretTarget,
-  type Segment,
-} from "./segments";
+  useFieldSearch,
+  type FieldSuggestion,
+  type SearchContext,
+  type SuggestionItem,
+} from "./useFieldSearch";
 
-/** A field the input can suggest, with the values it accepts. */
-export interface FieldSuggestion {
-  field: string;
-  /** Muted hint shown beside the field name. */
-  detail?: string;
-  values?: string[];
-}
-
-/** Everything a caller needs to react to a keystroke or fetch options. */
-export interface SearchContext {
-  /** Caret offset into `value`. */
-  caret: number;
-  /** Whether the caret sits in a field name or a value, and which field. */
-  target: CaretTarget;
-  /** The parsed tree, or `null` while the query is incomplete or invalid. */
-  ast: QueryNode | null;
-  /** Why it failed to parse, when it did. */
-  error: ParseError | null;
-  segments: Segment[];
-}
-
-/** Per-part class hooks, for Tailwind or any other styling approach. */
 export interface SearchInputClassNames {
   root?: string;
   field?: string;
@@ -42,41 +20,83 @@ export interface SearchInputClassNames {
   close?: string;
   operator?: string;
   paren?: string;
+  popover?: string;
   suggestions?: string;
   error?: string;
 }
 
-export interface SearchInputProps {
-  /** Controlled: the query string itself. Chips are derived from it. */
-  value: string;
-  onChange: (value: string, context: SearchContext) => void;
-  /** Fired on Enter, when no suggestion is being accepted. */
-  onSearch?: (value: string, context: SearchContext) => void;
-  fields?: FieldSuggestion[];
-  placeholder?: string;
-  className?: string;
-  classNames?: SearchInputClassNames;
-  /**
-   * Drop the bundled theme, keeping only the structural layout that the
-   * overlay needs. Style `.fs-*` yourself, or pass `classNames`.
-   */
-  unstyled?: boolean;
-  /** Render the parse error beneath the field. */
-  showError?: boolean;
+export interface SearchInputSlots {
+  root?: React.ElementType;
+  field?: React.ElementType;
+  layer?: React.ElementType;
+  error?: React.ElementType;
 }
 
-/** Characters that auto-close, and what closes them. */
+export interface SearchInputProps extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  "children" | "className" | "defaultValue" | "onChange" | "style" | "value"
+> {
+  /** Controlled query string. */
+  value: string;
+  onValueChange: (value: string, context: SearchContext) => void;
+  onSearch?: (value: string, context: SearchContext) => void;
+  /** Called for caret-only changes too, making async suggestions possible. */
+  onContextChange?: (context: SearchContext) => void;
+  fields?: FieldSuggestion[];
+  /** Controlled suggestions. Overrides the built-in `fields` matcher. */
+  suggestions?: SuggestionItem[];
+  suggestionsHeader?:
+    React.ReactNode | ((context: SearchContext) => React.ReactNode);
+  suggestionsLoading?: boolean;
+  loadingMessage?: React.ReactNode;
+  emptyMessage?: React.ReactNode;
+  onSuggestionSelect?: (item: SuggestionItem, index: number) => void;
+  onSegmentRemove?: (segment: Segment, index: number) => void;
+  renderSuggestion?: (
+    item: SuggestionItem,
+    state: { index: number; active: boolean },
+  ) => React.ReactNode;
+  renderChip?: (
+    segment: Segment,
+    state: { index: number; hovered: boolean; invalid: boolean },
+  ) => React.ReactNode;
+  /** Whether Tab accepts the active suggestion. Defaults to normal Tab behavior. */
+  acceptOnTab?: boolean;
+  showError?: boolean;
+  renderError?: (error: ParseError) => React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+  classNames?: SearchInputClassNames;
+  chipClassNames?: ChipClassNames;
+  suggestionClassNames?: SuggestionClassNames;
+  slots?: SearchInputSlots;
+  rootProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "children">;
+  errorProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "children">;
+  popoverProps?: Omit<
+    React.ComponentPropsWithoutRef<typeof Popover.Content>,
+    "children" | "className"
+  >;
+  /** Portal destination. Defaults to the root so scoped theme tokens inherit. */
+  portalContainer?: HTMLElement | null;
+}
+
 const PAIRS: Record<string, string> = { '"': '"', "(": ")", "[": "]" };
 const CLOSERS: Record<string, true> = { '"': true, ")": true, "]": true };
-
-/** Fallbacks matching layout.css, used when the stylesheet is absent. */
 const DEFAULT_GEOMETRY = { spread: 3, closeWidth: 12 };
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;
 
-/**
- * Chip geometry lives in CSS so retuning is a pure stylesheet change, and is
- * read back here so the hover region and the close section's position cannot
- * drift from what is actually painted.
- */
+interface Measured {
+  index: number;
+  inlineStart: number;
+  top: number;
+  height: number;
+}
+
+function join(base: string, extra?: string) {
+  return extra ? `${base} ${extra}` : base;
+}
+
 function readGeometry(node: HTMLElement | null) {
   if (!node) return DEFAULT_GEOMETRY;
   const style = getComputedStyle(node);
@@ -92,377 +112,523 @@ function readGeometry(node: HTMLElement | null) {
   };
 }
 
-interface Measured {
-  index: number;
-  left: number;
-  top: number;
-  height: number;
+function nextEnabledIndex(
+  items: SuggestionItem[],
+  current: number,
+  direction: 1 | -1,
+) {
+  if (items.length === 0) return -1;
+  for (let offset = 1; offset <= items.length; offset++) {
+    const index = (current + direction * offset + items.length) % items.length;
+    if (!items[index]?.disabled) return index;
+  }
+  return -1;
 }
 
-export function SearchInput({
-  value,
-  onChange,
-  onSearch,
-  fields = [],
-  placeholder,
-  className,
-  classNames = {},
-  unstyled = false,
-  showError = true,
-}: SearchInputProps) {
-  const inputRef = React.useRef<HTMLInputElement>(null);
-  const layerRef = React.useRef<HTMLDivElement>(null);
-  const rootRef = React.useRef<HTMLDivElement>(null);
-  const chipRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
-  const geometry = React.useRef(DEFAULT_GEOMETRY);
-
-  const [caret, setCaret] = React.useState(0);
-  const [focused, setFocused] = React.useState(false);
-  const [hovered, setHovered] = React.useState<Measured | null>(null);
-  const [activeIndex, setActiveIndex] = React.useState(0);
-
-  const { segments, validation } = React.useMemo(
-    () => segmentWithErrors(value),
-    [value],
-  );
-  const target = React.useMemo(() => caretTarget(value, caret), [value, caret]);
-
-  const context = React.useCallback(
-    (nextValue: string, nextCaret: number): SearchContext => {
-      const next = segmentWithErrors(nextValue);
-      return {
-        caret: nextCaret,
-        target: caretTarget(nextValue, nextCaret),
-        ast: next.validation.ast,
-        error: next.validation.error,
-        segments: next.segments,
-      };
+/** A styled convenience component built on the headless `useFieldSearch` API. */
+export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
+  function SearchInput(
+    {
+      value,
+      onValueChange,
+      onSearch,
+      onContextChange,
+      fields = [],
+      suggestions,
+      suggestionsHeader,
+      suggestionsLoading = false,
+      loadingMessage,
+      emptyMessage,
+      onSuggestionSelect,
+      onSegmentRemove,
+      renderSuggestion,
+      renderChip,
+      acceptOnTab = false,
+      showError = true,
+      renderError,
+      className,
+      style,
+      classNames = {},
+      chipClassNames,
+      suggestionClassNames,
+      slots = {},
+      rootProps,
+      errorProps,
+      popoverProps,
+      portalContainer,
+      id: suppliedId,
+      dir,
+      disabled,
+      readOnly,
+      onFocus,
+      onBlur,
+      onKeyDown,
+      onKeyUp,
+      onClick,
+      onSelect,
+      onScroll,
+      "aria-describedby": ariaDescribedBy,
+      "aria-invalid": ariaInvalid,
+      ...inputProps
     },
-    [],
-  );
+    forwardedRef,
+  ) {
+    const inputRef = React.useRef<HTMLInputElement>(null);
+    const layerRef = React.useRef<HTMLDivElement>(null);
+    const fieldRef = React.useRef<HTMLDivElement>(null);
+    const rootRef = React.useRef<HTMLDivElement>(null);
+    const chipRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
+    const geometry = React.useRef(DEFAULT_GEOMETRY);
+    const [inputFocused, setInputFocused] = React.useState(false);
+    const [dismissed, setDismissed] = React.useState(false);
+    const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null);
+    const [measurements, setMeasurements] = React.useState<Measured[]>([]);
 
-  /* ---------- suggestions ---------- */
+    const controller = useFieldSearch({
+      value,
+      onValueChange,
+      fields,
+      suggestions,
+      onContextChange,
+    });
 
-  const items = React.useMemo<SuggestionItem[]>(() => {
-    const fragment = target.fragment.toLowerCase();
+    const generatedId = React.useId().replaceAll(":", "");
+    const inputId = suppliedId ?? `field-search-${generatedId}`;
+    const listboxId = `${inputId}-suggestions`;
+    const errorId = `${inputId}-error`;
+    const activeItem = controller.items[controller.activeIndex];
+    const activeItemId = activeItem
+      ? `${listboxId}-option-${controller.activeIndex}`
+      : undefined;
 
-    if (target.kind === "value") {
-      const match = fields.find((f) => f.field === target.field);
-      return (match?.values ?? [])
-        .filter((v) => v.toLowerCase().includes(fragment))
-        .map((v) => ({
-          label: v,
-          detail: match?.field,
-          insert: /[\s()"]/.test(v) ? `"${v}"` : v,
-        }));
-    }
+    const hasSuggestionContent =
+      controller.items.length > 0 || suggestionsLoading || emptyMessage != null;
+    const open =
+      inputFocused && !disabled && !dismissed && hasSuggestionContent;
+    const revealErrors = !inputFocused;
+    const invalid =
+      revealErrors && controller.segments.some((segment) => segment.error);
 
-    return fields
-      .filter((f) => f.field.toLowerCase().includes(fragment))
-      .map((f) => ({
-        label: `${f.field}:`,
-        detail: f.detail ?? `${f.values?.length ?? 0} values`,
-        insert: `${f.field}:`,
-      }));
-  }, [fields, target]);
+    const setInputRef = React.useCallback(
+      (node: HTMLInputElement | null) => {
+        inputRef.current = node;
+        if (typeof forwardedRef === "function") forwardedRef(node);
+        else if (forwardedRef) forwardedRef.current = node;
+      },
+      [forwardedRef],
+    );
 
-  React.useEffect(() => setActiveIndex(0), [target.kind, target.fragment]);
+    useIsomorphicLayoutEffect(() => {
+      const position = controller.pendingCaretRef.current;
+      if (position === null) return;
+      controller.pendingCaretRef.current = null;
+      inputRef.current?.setSelectionRange(position, position);
+    });
 
-  const open = focused && items.length > 0;
+    const measureChips = React.useCallback(() => {
+      const field = fieldRef.current;
+      if (!field) return;
+      const bounds = field.getBoundingClientRect();
+      const direction = getComputedStyle(field).direction;
+      const { spread } = geometry.current;
+      const next: Measured[] = [];
 
-  /* ---------- editing ---------- */
-
-  // Restoring the caret on a rAF loses races against fast input: the next
-  // keystroke arrives before the callback runs and lands at a stale offset.
-  // A layout effect applies it synchronously with the DOM update instead.
-  const pendingCaret = React.useRef<number | null>(null);
-
-  React.useLayoutEffect(() => {
-    const position = pendingCaret.current;
-    if (position === null) return;
-    pendingCaret.current = null;
-    inputRef.current?.setSelectionRange(position, position);
-  });
-
-  const commit = React.useCallback(
-    (nextValue: string, nextCaret: number) => {
-      pendingCaret.current = nextCaret;
-      setCaret(nextCaret);
-      onChange(nextValue, context(nextValue, nextCaret));
-    },
-    [context, onChange],
-  );
-
-  const accept = React.useCallback(
-    (item: SuggestionItem) => {
-      const head = value.slice(0, target.replaceFrom);
-      const tail = value.slice(caret);
-      commit(
-        `${head}${item.insert}${tail}`,
-        target.replaceFrom + item.insert.length,
-      );
-    },
-    [caret, commit, target.replaceFrom, value],
-  );
-
-  const removeSegment = React.useCallback(
-    (segmentIndex: number) => {
-      const seg = segments[segmentIndex];
-      if (!seg) return;
-      // Take the trailing space with the chip so removal never leaves a gap.
-      const after = segments[segmentIndex + 1];
-      const end = after?.kind === "space" ? after.end : seg.end;
-      const before = segments[segmentIndex - 1];
-      const start =
-        !after && before?.kind === "space" ? before.start : seg.start;
-      commit(value.slice(0, start) + value.slice(end), start);
-      setHovered(null);
-    },
-    [commit, segments, value],
-  );
-
-  const syncCaret = React.useCallback(() => {
-    setCaret(inputRef.current?.selectionStart ?? 0);
-  }, []);
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const input = event.currentTarget;
-    const start = input.selectionStart ?? 0;
-    const end = input.selectionEnd ?? start;
-
-    if (open) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setActiveIndex((i) => (i + 1) % items.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setActiveIndex((i) => (i - 1 + items.length) % items.length);
-        return;
-      }
-      if (
-        event.key === "Tab" ||
-        (event.key === "Enter" && items[activeIndex])
-      ) {
-        event.preventDefault();
-        accept(items[activeIndex]!);
-        return;
-      }
-    }
-
-    if (event.key === "Enter") {
-      event.preventDefault();
-      onSearch?.(value, context(value, start));
-      return;
-    }
-
-    if (event.key === "Escape") {
-      setFocused(false);
-      return;
-    }
-
-    // Typing a closer where one already sits just steps over it.
-    if (CLOSERS[event.key] && start === end && value[start] === event.key) {
-      event.preventDefault();
-      commit(value, start + 1);
-      return;
-    }
-
-    const closer = PAIRS[event.key];
-    if (closer && start === end) {
-      event.preventDefault();
-      const next = `${value.slice(0, start)}${event.key}${closer}${value.slice(start)}`;
-      commit(next, start + 1);
-      return;
-    }
-  };
-
-  /* ---------- hover hit-testing ---------- */
-
-  // The layer is `pointer-events: none` so the input can own the caret, which
-  // means chips never get :hover. Hit-test their rects against the pointer
-  // instead. The close section counts as part of the chip's hover region —
-  // otherwise moving onto the button leaves the chip, which unmounts the
-  // button out from under the cursor before the click can land.
-  const handleMouseMove = (event: React.MouseEvent) => {
-    const layer = layerRef.current;
-    if (!layer) return;
-    const bounds = layer.getBoundingClientRect();
-    const { clientX, clientY } = event;
-    const { spread, closeWidth } = geometry.current;
-
-    for (let i = 0; i < chipRefs.current.length; i++) {
-      const node = chipRefs.current[i];
-      if (!node) continue;
-      const rect = node.getBoundingClientRect();
-      // The pill paints `spread` past the text box on every side, and the
-      // close section sits just beyond it, in the gap before the next chip.
-      const within =
-        clientX >= rect.left - spread &&
-        clientX <= rect.right + spread + closeWidth &&
-        clientY >= rect.top - spread &&
-        clientY <= rect.bottom + spread;
-
-      if (within) {
-        setHovered({
-          index: i,
-          left: rect.right - bounds.left + spread,
+      for (let index = 0; index < chipRefs.current.length; index++) {
+        const node = chipRefs.current[index];
+        if (!node) continue;
+        const rect = node.getBoundingClientRect();
+        next.push({
+          index,
+          inlineStart:
+            direction === "rtl"
+              ? bounds.right - rect.left + spread
+              : rect.right - bounds.left + spread,
           top: rect.top - bounds.top - spread,
           height: rect.height + spread * 2,
         });
+      }
+      setMeasurements(next);
+    }, []);
+
+    useIsomorphicLayoutEffect(() => {
+      geometry.current = readGeometry(rootRef.current);
+      measureChips();
+      const field = fieldRef.current;
+      if (!field || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(measureChips);
+      observer.observe(field);
+      for (const chip of chipRefs.current) if (chip) observer.observe(chip);
+      return () => observer.disconnect();
+    }, [measureChips, value]);
+
+    const syncCaret = React.useCallback(() => {
+      controller.setCaret(inputRef.current?.selectionStart ?? 0);
+    }, [controller]);
+
+    const handleMouseMove = (event: React.MouseEvent) => {
+      const field = fieldRef.current;
+      if (!field) return;
+      const direction = getComputedStyle(field).direction;
+      const { clientX, clientY } = event;
+      const { spread, closeWidth } = geometry.current;
+
+      for (let index = 0; index < chipRefs.current.length; index++) {
+        const node = chipRefs.current[index];
+        if (!node) continue;
+        const rect = node.getBoundingClientRect();
+        const start =
+          direction === "rtl"
+            ? rect.left - spread - closeWidth
+            : rect.left - spread;
+        const end =
+          direction === "rtl"
+            ? rect.right + spread
+            : rect.right + spread + closeWidth;
+        if (
+          clientX >= start &&
+          clientX <= end &&
+          clientY >= rect.top - spread &&
+          clientY <= rect.bottom + spread
+        ) {
+          setHoveredIndex(index);
+          return;
+        }
+      }
+      setHoveredIndex(null);
+    };
+
+    const syncScroll = (event: React.UIEvent<HTMLInputElement>) => {
+      const layer = layerRef.current;
+      if (layer) layer.scrollLeft = event.currentTarget.scrollLeft;
+      measureChips();
+      onScroll?.(event);
+    };
+
+    const choose = (item: SuggestionItem, index: number) => {
+      if (readOnly || disabled) return;
+      controller.accept(item);
+      setDismissed(false);
+      onSuggestionSelect?.(item, index);
+    };
+
+    const remove = (segment: Segment, index: number) => {
+      if (readOnly || disabled) return;
+      controller.removeSegment(index);
+      setHoveredIndex(null);
+      onSegmentRemove?.(segment, index);
+      inputRef.current?.focus();
+    };
+
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+      onKeyDown?.(event);
+      if (event.defaultPrevented || event.nativeEvent.isComposing) return;
+
+      if (open && event.key === "ArrowDown") {
+        event.preventDefault();
+        controller.setActiveIndex((index) =>
+          nextEnabledIndex(controller.items, index, 1),
+        );
         return;
       }
-    }
-    setHovered(null);
-  };
+      if (open && event.key === "ArrowUp") {
+        event.preventDefault();
+        controller.setActiveIndex((index) =>
+          nextEnabledIndex(controller.items, index, -1),
+        );
+        return;
+      }
+      if (
+        open &&
+        activeItem &&
+        !activeItem.disabled &&
+        (event.key === "Enter" || (acceptOnTab && event.key === "Tab"))
+      ) {
+        event.preventDefault();
+        choose(activeItem, controller.activeIndex);
+        return;
+      }
+      if (event.key === "Escape" && open) {
+        event.preventDefault();
+        setDismissed(true);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        onSearch?.(value, controller.context);
+        return;
+      }
+      if (readOnly || disabled) return;
 
-  // Re-read once per hover session rather than per event: cheap, and picks up
-  // a retheme without watching for style changes.
-  const handleMouseEnter = () => {
-    geometry.current = readGeometry(rootRef.current);
-  };
+      const start = event.currentTarget.selectionStart ?? 0;
+      const end = event.currentTarget.selectionEnd ?? start;
+      if (CLOSERS[event.key] && start === end && value[start] === event.key) {
+        event.preventDefault();
+        controller.commit(value, start + 1);
+        return;
+      }
+      const closer = PAIRS[event.key];
+      if (closer && start === end) {
+        event.preventDefault();
+        controller.commit(
+          `${value.slice(0, start)}${event.key}${closer}${value.slice(start)}`,
+          start + 1,
+        );
+      }
+    };
 
-  const syncScroll = () => {
-    const layer = layerRef.current;
-    const input = inputRef.current;
-    if (layer && input) layer.scrollLeft = input.scrollLeft;
-  };
+    const Root = slots.root ?? "div";
+    const Field = slots.field ?? "div";
+    const Layer = slots.layer ?? "div";
+    const ErrorSlot = slots.error ?? "div";
+    const header =
+      typeof suggestionsHeader === "function"
+        ? suggestionsHeader(controller.context)
+        : (suggestionsHeader ??
+          (controller.context.target.kind === "value"
+            ? `Values for ${controller.context.target.field}`
+            : "Filter by"));
+    const describedBy =
+      showError && revealErrors && controller.validation.error
+        ? [ariaDescribedBy, errorId].filter(Boolean).join(" ")
+        : ariaDescribedBy;
+    const {
+      side = "bottom",
+      align = "start",
+      sideOffset = 6,
+      onOpenAutoFocus,
+      onCloseAutoFocus,
+      ...contentProps
+    } = popoverProps ?? {};
 
-  // A half-typed `name:` is not a mistake, it is an unfinished thought.
-  // Errors stay hidden while the field has focus and surface on blur.
-  const revealErrors = !focused;
-  const invalid = revealErrors && segments.some((s) => s.error);
-
-  const themed = unstyled ? "" : " fs-theme";
-  const join = (base: string, extra?: string) =>
-    extra ? `${base} ${extra}` : base;
-
-  return (
-    <div
-      ref={rootRef}
-      className={join(
-        `fs-root${themed}`,
-        [className, classNames.root].filter(Boolean).join(" ") || undefined,
-      )}
-    >
-      <Popover.Root open={open}>
-        <Popover.Anchor asChild>
-          <div
-            className={join("fs-field", classNames.field)}
-            data-invalid={invalid || undefined}
-            onMouseEnter={handleMouseEnter}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={() => setHovered(null)}
-          >
-            <div
-              className={join("fs-layer", classNames.layer)}
-              ref={layerRef}
-              aria-hidden="true"
+    return (
+      <Root
+        {...rootProps}
+        ref={rootRef}
+        className={join(
+          "fs-root",
+          [className, classNames.root, rootProps?.className]
+            .filter(Boolean)
+            .join(" ") || undefined,
+        )}
+        style={{ ...rootProps?.style, ...style }}
+        dir={rootProps?.dir ?? dir}
+        data-slot="root"
+      >
+        <Popover.Root
+          open={open}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setDismissed(true);
+          }}
+        >
+          <Popover.Anchor asChild>
+            <Field
+              ref={fieldRef}
+              className={join("fs-field", classNames.field)}
+              data-slot="field"
+              data-invalid={invalid || undefined}
+              data-disabled={disabled || undefined}
+              onMouseEnter={() => {
+                geometry.current = readGeometry(rootRef.current);
+                measureChips();
+              }}
+              onMouseMove={handleMouseMove}
+              onMouseLeave={() => setHoveredIndex(null)}
             >
-              {segments.map((seg, index) => {
-                if (seg.kind === "chip") {
+              <Layer
+                ref={layerRef}
+                className={join("fs-layer", classNames.layer)}
+                data-slot="highlight-layer"
+                aria-hidden="true"
+              >
+                {controller.segments.map((segment, index) => {
+                  if (segment.kind === "chip") {
+                    const hovered = hoveredIndex === index;
+                    return (
+                      <Chip
+                        key={`${segment.start}-${segment.text}`}
+                        ref={(node) => {
+                          chipRefs.current[index] = node;
+                        }}
+                        segment={segment}
+                        hovered={hovered}
+                        showError={revealErrors}
+                        className={classNames.chip}
+                        classNames={chipClassNames}
+                      >
+                        {renderChip?.(segment, {
+                          index,
+                          hovered,
+                          invalid: Boolean(revealErrors && segment.error),
+                        })}
+                      </Chip>
+                    );
+                  }
+                  chipRefs.current[index] = null;
+                  const segmentClassName =
+                    segment.kind === "operator"
+                      ? join("fs-operator", classNames.operator)
+                      : segment.kind === "paren"
+                        ? join("fs-top-paren", classNames.paren)
+                        : undefined;
                   return (
-                    <Chip
-                      key={`${seg.start}-${seg.text}`}
-                      segment={seg}
-                      hovered={hovered?.index === index}
-                      showError={revealErrors}
-                      className={classNames.chip}
-                      elementRef={(node) => {
-                        chipRefs.current[index] = node;
-                      }}
-                    />
+                    <span
+                      key={`${segment.start}-${segment.kind}`}
+                      className={segmentClassName}
+                      data-slot={segment.kind}
+                    >
+                      {segment.text}
+                    </span>
                   );
-                }
-                chipRefs.current[index] = null;
-                const cls =
-                  seg.kind === "operator"
-                    ? join("fs-operator", classNames.operator)
-                    : seg.kind === "paren"
-                      ? join("fs-top-paren", classNames.paren)
-                      : undefined;
+                })}
+              </Layer>
+
+              <input
+                {...inputProps}
+                ref={setInputRef}
+                id={inputId}
+                dir={dir}
+                className={join("fs-native", classNames.input)}
+                data-slot="input"
+                type="text"
+                spellCheck={inputProps.spellCheck ?? false}
+                autoComplete={inputProps.autoComplete ?? "off"}
+                disabled={disabled}
+                readOnly={readOnly}
+                value={value}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-haspopup="listbox"
+                aria-expanded={open}
+                aria-controls={open ? listboxId : undefined}
+                aria-activedescendant={open ? activeItemId : undefined}
+                aria-invalid={ariaInvalid ?? (invalid || undefined)}
+                aria-describedby={describedBy || undefined}
+                onChange={(event) => {
+                  const nextValue = event.currentTarget.value;
+                  const position =
+                    event.currentTarget.selectionStart ?? nextValue.length;
+                  setDismissed(false);
+                  controller.commit(nextValue, position);
+                }}
+                onKeyDown={handleKeyDown}
+                onKeyUp={(event) => {
+                  syncCaret();
+                  onKeyUp?.(event);
+                }}
+                onClick={(event) => {
+                  setDismissed(false);
+                  syncCaret();
+                  onClick?.(event);
+                }}
+                onSelect={(event) => {
+                  syncCaret();
+                  onSelect?.(event);
+                }}
+                onScroll={syncScroll}
+                onFocus={(event) => {
+                  setInputFocused(true);
+                  setDismissed(false);
+                  syncCaret();
+                  onFocus?.(event);
+                }}
+                onBlur={(event) => {
+                  setInputFocused(false);
+                  onBlur?.(event);
+                }}
+              />
+
+              {measurements.map((measurement) => {
+                const segment = controller.segments[measurement.index];
+                if (!segment || segment.kind !== "chip") return null;
                 return (
-                  <span key={`${seg.start}-${seg.kind}`} className={cls}>
-                    {seg.text}
-                  </span>
+                  <button
+                    key={`remove-${segment.start}-${segment.text}`}
+                    type="button"
+                    className={join("fs-close", classNames.close)}
+                    data-slot="remove"
+                    data-visible={
+                      hoveredIndex === measurement.index || undefined
+                    }
+                    data-negated={segment.negated || undefined}
+                    style={{
+                      insetInlineStart: measurement.inlineStart,
+                      top: measurement.top,
+                      height: measurement.height,
+                    }}
+                    disabled={disabled || readOnly}
+                    aria-label={`Remove ${segment.text}`}
+                    onFocus={() => setHoveredIndex(measurement.index)}
+                    onBlur={() => setHoveredIndex(null)}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => remove(segment, measurement.index)}
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
                 );
               })}
-            </div>
+            </Field>
+          </Popover.Anchor>
 
-            <input
-              ref={inputRef}
-              className={join("fs-native", classNames.input)}
-              type="text"
-              spellCheck={false}
-              autoComplete="off"
-              value={value}
-              placeholder={placeholder}
-              onChange={(event) => {
-                const next = event.target.value;
-                const position = event.target.selectionStart ?? next.length;
-                setCaret(position);
-                onChange(next, context(next, position));
+          <Popover.Portal container={portalContainer ?? rootRef.current}>
+            <Popover.Content
+              {...contentProps}
+              className={join("fs-suggestions-wrap", classNames.popover)}
+              data-slot="popover"
+              side={side}
+              align={align}
+              sideOffset={sideOffset}
+              onOpenAutoFocus={(event) => {
+                onOpenAutoFocus?.(event);
+                if (!event.defaultPrevented) event.preventDefault();
               }}
-              onKeyDown={handleKeyDown}
-              onKeyUp={syncCaret}
-              onClick={syncCaret}
-              onSelect={syncCaret}
-              onScroll={syncScroll}
-              onFocus={() => setFocused(true)}
-              onBlur={() => window.setTimeout(() => setFocused(false), 120)}
-            />
+              onCloseAutoFocus={(event) => {
+                onCloseAutoFocus?.(event);
+                if (!event.defaultPrevented) event.preventDefault();
+              }}
+            >
+              <Suggestions
+                id={listboxId}
+                items={controller.items}
+                activeIndex={controller.activeIndex}
+                className={classNames.suggestions}
+                classNames={suggestionClassNames}
+                header={header}
+                loading={suggestionsLoading}
+                loadingMessage={loadingMessage}
+                emptyMessage={emptyMessage}
+                getItemId={(_item, index) => `${listboxId}-option-${index}`}
+                renderItem={renderSuggestion}
+                onSelect={choose}
+                onActiveIndexChange={controller.setActiveIndex}
+              />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
 
-            {hovered && segments[hovered.index] && (
-              <button
-                type="button"
-                className={join("fs-close", classNames.close)}
-                data-negated={segments[hovered.index]!.negated || undefined}
-                style={{
-                  left: hovered.left,
-                  top: hovered.top,
-                  height: hovered.height,
-                }}
-                aria-label={`Remove ${segments[hovered.index]!.text}`}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => removeSegment(hovered.index)}
-              >
-                ×
-              </button>
+        {showError && revealErrors && controller.validation.error && (
+          <ErrorSlot
+            {...errorProps}
+            id={errorId}
+            className={join(
+              "fs-error",
+              [classNames.error, errorProps?.className]
+                .filter(Boolean)
+                .join(" ") || undefined,
             )}
-          </div>
-        </Popover.Anchor>
-
-        <Popover.Portal>
-          <Popover.Content
-            className={`fs-suggestions-wrap${themed}`}
-            side="bottom"
-            align="start"
-            sideOffset={6}
-            onOpenAutoFocus={(event) => event.preventDefault()}
-            onCloseAutoFocus={(event) => event.preventDefault()}
+            data-slot="error"
+            role="alert"
           >
-            <Suggestions
-              items={items}
-              activeIndex={activeIndex}
-              className={classNames.suggestions}
-              header={
-                target.kind === "value"
-                  ? `Values for ${target.field}`
-                  : "Filter by"
-              }
-              onSelect={accept}
-              onActiveIndexChange={setActiveIndex}
-            />
-          </Popover.Content>
-        </Popover.Portal>
-      </Popover.Root>
+            {renderError?.(controller.validation.error) ??
+              controller.validation.error.message}
+          </ErrorSlot>
+        )}
+      </Root>
+    );
+  },
+);
 
-      {showError && revealErrors && validation.error && (
-        <div className={join("fs-error", classNames.error)}>
-          {validation.error.message}
-        </div>
-      )}
-    </div>
-  );
-}
+export type {
+  FieldSuggestion,
+  SearchContext,
+  SuggestionItem,
+} from "./useFieldSearch";

@@ -75,6 +75,31 @@ await shoot(page, "03-pointer-on-close", FIELD);
 await page.mouse.move(5, 5);
 await setQuery(page, "co");
 await new Promise((r) => setTimeout(r, 350));
+const combobox = await page.$eval(INPUT, (input) => {
+  const controls = input.getAttribute("aria-controls");
+  const active = input.getAttribute("aria-activedescendant");
+  return {
+    role: input.getAttribute("role"),
+    expanded: input.getAttribute("aria-expanded"),
+    controlsListbox: Boolean(
+      controls &&
+      document.getElementById(controls)?.getAttribute("role") === "listbox",
+    ),
+    activeOption: Boolean(
+      active &&
+      document.getElementById(active)?.getAttribute("role") === "option",
+    ),
+  };
+});
+console.log("combobox wiring:", combobox);
+if (
+  combobox.role !== "combobox" ||
+  combobox.expanded !== "true" ||
+  !combobox.controlsListbox ||
+  !combobox.activeOption
+) {
+  throw new Error("combobox ARIA relationship is incomplete");
+}
 await shoot(page, "04-suggestions-fields", ".pg");
 
 await setQuery(page, "colors:gr");
@@ -87,5 +112,53 @@ await shoot(page, "06-typing-no-error", FIELD);
 await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
 await new Promise((r) => setTimeout(r, 250));
 await shoot(page, "07-blurred-error", ".fs-root");
+
+// Tab follows normal form navigation and reveals the first remove control.
+await setQuery(page, "kind:fruit colors:green");
+await page.keyboard.press("Tab");
+await new Promise((r) => setTimeout(r, 200));
+const focusedRemove = await page.evaluate(() =>
+  document.activeElement?.getAttribute("aria-label"),
+);
+console.log("keyboard removal focus:", focusedRemove);
+console.log(
+  "keyboard removal geometry:",
+  await page.evaluate(() => {
+    const input = document.querySelector(".fs-native") as HTMLInputElement;
+    const layer = document.querySelector(".fs-layer") as HTMLElement;
+    const chips = [...document.querySelectorAll(".fs-chip")].map((chip) => ({
+      text: chip.textContent,
+      left: chip.getBoundingClientRect().left,
+      right: chip.getBoundingClientRect().right,
+    }));
+    return {
+      inputScroll: input.scrollLeft,
+      layerScroll: layer.scrollLeft,
+      chips,
+    };
+  }),
+);
+if (focusedRemove !== "Remove kind:fruit") {
+  throw new Error("Tab did not reach the first remove control");
+}
+await shoot(page, "08-keyboard-remove", FIELD);
+
+// Scoped tokens must follow the suggestion list through its portal.
+await page.$$eval(".pg-skin", (buttons) => {
+  const midnight = buttons.find((button) => button.textContent === "Midnight");
+  (midnight as HTMLButtonElement | undefined)?.click();
+});
+await setQuery(page, "co");
+await new Promise((r) => setTimeout(r, 300));
+await shoot(page, "09-midnight-suggestions", ".pg");
+
+await page.$$eval(".pg-skin", (buttons) => {
+  const custom = buttons.find((button) => button.textContent === "Custom");
+  (custom as HTMLButtonElement | undefined)?.click();
+});
+await setQuery(page, "kind:fruit");
+await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
+await new Promise((r) => setTimeout(r, 200));
+await shoot(page, "10-custom-classes", FIELD);
 
 await browser.close();

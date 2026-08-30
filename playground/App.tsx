@@ -103,12 +103,16 @@ const EXAMPLES: { label: string; query: string; note: string }[] = [
   },
 ];
 
-type Skin = "default" | "midnight" | "unstyled";
+type Skin = "default" | "midnight" | "custom";
 
 const SKINS: { id: Skin; label: string; note: string }[] = [
   { id: "default", label: "Default", note: "styles.css as shipped" },
   { id: "midnight", label: "Midnight", note: "token overrides only" },
-  { id: "unstyled", label: "Unstyled", note: "layout.css only" },
+  {
+    id: "custom",
+    label: "Custom",
+    note: "consumer classes override the theme",
+  },
 ];
 
 export default function App() {
@@ -165,16 +169,13 @@ export default function App() {
       <div className={skin === "midnight" ? "pg-midnight" : undefined}>
         <SearchInput
           value={query}
-          onChange={(next, ctx) => {
-            setQuery(next);
-            setContext(ctx);
-          }}
+          onValueChange={setQuery}
+          onContextChange={setContext}
           onSearch={(next) => setSearched(next)}
           fields={FIELDS}
           placeholder="kind:fruit -colors:green"
-          unstyled={skin === "unstyled"}
           classNames={
-            skin === "unstyled"
+            skin === "custom"
               ? { field: "pg-bare-field", chip: "pg-bare-chip" }
               : undefined
           }
@@ -210,8 +211,8 @@ export default function App() {
             <dd>{context ? (context.ast ? "yes" : "no") : "—"}</dd>
           </dl>
           <p className="pg-note">
-            This is what <code>onChange</code> hands you, so a caller knows
-            which options to fetch.
+            This is what <code>onContextChange</code> hands you, so a caller
+            knows which options to fetch.
           </p>
         </div>
 

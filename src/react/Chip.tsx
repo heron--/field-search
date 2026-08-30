@@ -83,15 +83,21 @@ function highlightValue(value: string): Piece[] {
   flush();
   return pieces;
 }
-export interface ChipProps {
+export interface ChipClassNames {
+  negate?: string;
+  field?: string;
+  punctuation?: string;
+  operator?: string;
+  string?: string;
+  number?: string;
+}
+
+export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
   segment: Segment;
-  hovered: boolean;
+  hovered?: boolean;
   /** Errors stay hidden while the field has focus; see SearchInput. */
   showError?: boolean;
-  /** Appended to `fs-chip`, for styling without the bundled theme. */
-  className?: string;
-  /** Assigned by the input so it can measure the chip for the close section. */
-  elementRef?: (node: HTMLSpanElement | null) => void;
+  classNames?: ChipClassNames;
 }
 
 /**
@@ -101,13 +107,23 @@ export interface ChipProps {
  * input, so it carries no interaction of its own — hover is tracked by the
  * input via hit-testing, and the close button is rendered above the input.
  */
-export function Chip({
-  segment,
-  hovered,
-  showError = true,
-  className,
-  elementRef,
-}: ChipProps) {
+function join(base: string, extra?: string) {
+  return extra ? `${base} ${extra}` : base;
+}
+
+export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
+  {
+    segment,
+    hovered = false,
+    showError = true,
+    className,
+    classNames = {},
+    children,
+    title,
+    ...props
+  },
+  ref,
+) {
   const { text, colon, negated, error } = segment;
   const fault = showError ? error : undefined;
 
@@ -116,27 +132,66 @@ export function Chip({
   const field = hasField ? text.slice(head, colon) : "";
   const value = hasField ? text.slice(colon + 1) : text.slice(head);
 
+  const pieceClassName = (piece: Piece) => {
+    if (piece.cls === "fs-operator") {
+      return join(piece.cls, classNames.operator);
+    }
+    if (piece.cls === "fs-string") return join(piece.cls, classNames.string);
+    if (piece.cls === "fs-number") return join(piece.cls, classNames.number);
+    if (piece.cls === "fs-punct") {
+      return join(piece.cls, classNames.punctuation);
+    }
+    return undefined;
+  };
+
   return (
     <span
-      ref={elementRef}
-      className={className ? `fs-chip ${className}` : "fs-chip"}
+      {...props}
+      ref={ref}
+      className={join("fs-chip", className)}
+      data-slot="chip"
       data-negated={negated || undefined}
       data-hovered={hovered || undefined}
       data-invalid={fault ? true : undefined}
-      title={fault}
+      title={title ?? fault}
     >
-      {negated && <span className="fs-negate">-</span>}
-      {hasField && (
+      {children ?? (
         <>
-          <span className="fs-field-name">{field}</span>
-          <span className="fs-punct">:</span>
+          {negated && (
+            <span
+              className={join("fs-negate", classNames.negate)}
+              data-slot="chip-negate"
+            >
+              -
+            </span>
+          )}
+          {hasField && (
+            <>
+              <span
+                className={join("fs-field-name", classNames.field)}
+                data-slot="chip-field"
+              >
+                {field}
+              </span>
+              <span
+                className={join("fs-punct", classNames.punctuation)}
+                data-slot="chip-punctuation"
+              >
+                :
+              </span>
+            </>
+          )}
+          {highlightValue(value).map((piece, index) => (
+            <span
+              key={index}
+              className={pieceClassName(piece)}
+              data-slot="chip-value"
+            >
+              {piece.text}
+            </span>
+          ))}
         </>
       )}
-      {highlightValue(value).map((piece, index) => (
-        <span key={index} className={piece.cls || undefined}>
-          {piece.text}
-        </span>
-      ))}
     </span>
   );
-}
+});

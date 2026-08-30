@@ -205,7 +205,7 @@ kbd {
 }
 
 /* A retheme through tokens alone — no component or class changes. */
-.pg-midnight .fs-theme {
+.pg-midnight .fs-root {
   --fs-bg: #0f172a;
   --fs-fg: #e2e8f0;
   --fs-muted: #64748b;
@@ -224,7 +224,7 @@ kbd {
   --fs-gap: 0.8em;
 }
 
-/* Unstyled: layout.css only, visuals supplied here via classNames. */
+/* Consumer classes win over the library's low-specificity theme layer. */
 .pg-bare-field {
   border: 2px dashed #a8a29e;
   border-radius: 2px;

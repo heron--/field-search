@@ -6,7 +6,8 @@
  * If you want to bring your own visuals, import only the structural half and
  * style `.fs-*` yourself:
  *
- *   import "field-search/layout.css";
+ *   import "field-search/base.css";
  */
-@import "./layout.css";
+@layer field-search.base, field-search.theme;
+@import "./base.css";
 @import "./theme.css";
