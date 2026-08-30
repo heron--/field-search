@@ -3,7 +3,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type { ParseError } from "../parser";
 import { Chip, type ChipClassNames } from "./Chip";
 import { Suggestions, type SuggestionClassNames } from "./Suggestions";
-import type { Segment } from "./segments";
+import { normalizeOperators, type Segment } from "./segments";
 import {
   useFieldSearch,
   type FieldSuggestion,
@@ -62,6 +62,12 @@ export interface SearchInputProps extends Omit<
   ) => React.ReactNode;
   /** Whether Tab accepts the active suggestion. Defaults to normal Tab behavior. */
   acceptOnTab?: boolean;
+  /** Commit a valid draft when the input loses focus. Defaults to true. */
+  searchOnBlur?: boolean;
+  /** Commit when a valid chip is completed. Defaults to true. */
+  searchOnChipComplete?: boolean;
+  /** Commit the remaining valid query after chip removal. Defaults to true. */
+  searchOnRemove?: boolean;
   showError?: boolean;
   renderError?: (error: ParseError) => React.ReactNode;
   className?: string;
@@ -125,6 +131,27 @@ function nextEnabledIndex(
   return -1;
 }
 
+function endsWithNewSeparator(
+  previousValue: string,
+  nextValue: string,
+  caret: number,
+  context: SearchContext,
+) {
+  if (nextValue.length <= previousValue.length || caret <= 0) return false;
+  const separator = nextValue[caret - 1];
+  const before = nextValue[caret - 2];
+  const segment = context.segments.find(
+    (current) => caret - 1 >= current.start && caret - 1 < current.end,
+  );
+  return Boolean(
+    segment?.kind === "space" &&
+    separator &&
+    /\s/.test(separator) &&
+    before &&
+    !/\s/.test(before),
+  );
+}
+
 /** A styled convenience component built on the headless `useFieldSearch` API. */
 export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput(
@@ -144,6 +171,9 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       renderSuggestion,
       renderChip,
       acceptOnTab = false,
+      searchOnBlur = true,
+      searchOnChipComplete = true,
+      searchOnRemove = true,
       showError = true,
       renderError,
       className,
@@ -306,16 +336,22 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
 
     const choose = (item: SuggestionItem, index: number) => {
       if (readOnly || disabled) return;
-      controller.accept(item);
+      const mutation = controller.accept(item);
       setDismissed(false);
       onSuggestionSelect?.(item, index);
+      if (searchOnChipComplete && mutation?.context.valid) {
+        onSearch?.(mutation.value, mutation.context);
+      }
     };
 
     const remove = (segment: Segment, index: number) => {
       if (readOnly || disabled) return;
-      controller.removeSegment(index);
+      const mutation = controller.removeSegment(index);
       setHoveredIndex(null);
       onSegmentRemove?.(segment, index);
+      if (searchOnRemove && mutation?.context.valid) {
+        onSearch?.(mutation.value, mutation.context);
+      }
       inputRef.current?.focus();
     };
 
@@ -354,7 +390,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        onSearch?.(value, controller.context);
+        if (controller.context.valid) onSearch?.(value, controller.context);
         return;
       }
       if (readOnly || disabled) return;
@@ -363,7 +399,10 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       const end = event.currentTarget.selectionEnd ?? start;
       if (CLOSERS[event.key] && start === end && value[start] === event.key) {
         event.preventDefault();
-        controller.commit(value, start + 1);
+        const mutation = controller.commit(value, start + 1);
+        if (searchOnChipComplete && mutation.context.valid) {
+          onSearch?.(mutation.value, mutation.context);
+        }
         return;
       }
       const closer = PAIRS[event.key];
@@ -504,11 +543,24 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                 aria-invalid={ariaInvalid ?? (invalid || undefined)}
                 aria-describedby={describedBy || undefined}
                 onChange={(event) => {
-                  const nextValue = event.currentTarget.value;
+                  const rawValue = event.currentTarget.value;
+                  const nextValue = normalizeOperators(rawValue);
                   const position =
-                    event.currentTarget.selectionStart ?? nextValue.length;
+                    event.currentTarget.selectionStart ?? rawValue.length;
                   setDismissed(false);
-                  controller.commit(nextValue, position);
+                  const mutation = controller.commit(nextValue, position);
+                  if (
+                    searchOnChipComplete &&
+                    mutation.context.valid &&
+                    endsWithNewSeparator(
+                      value,
+                      nextValue,
+                      position,
+                      mutation.context,
+                    )
+                  ) {
+                    onSearch?.(mutation.value, mutation.context);
+                  }
                 }}
                 onKeyDown={handleKeyDown}
                 onKeyUp={(event) => {
@@ -533,6 +585,17 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                 }}
                 onBlur={(event) => {
                   setInputFocused(false);
+                  const nextFocus = event.relatedTarget;
+                  const leftComponent =
+                    !(nextFocus instanceof Node) ||
+                    !rootRef.current?.contains(nextFocus);
+                  if (
+                    searchOnBlur &&
+                    leftComponent &&
+                    controller.context.valid
+                  ) {
+                    onSearch?.(value, controller.context);
+                  }
                   onBlur?.(event);
                 }}
               />

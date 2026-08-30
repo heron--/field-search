@@ -35,6 +35,13 @@ async function setQuery(page: Page, text: string) {
   await new Promise((r) => setTimeout(r, 250));
 }
 
+async function committedQuery(page: Page) {
+  return page.$eval(
+    ".pg-committed code",
+    (node) => node.textContent?.trim() ?? "",
+  );
+}
+
 async function centerOf(page: Page, index: number) {
   return page.evaluate((i) => {
     const chip = [...document.querySelectorAll(".fs-chip")][i] as HTMLElement;
@@ -58,6 +65,10 @@ await new Promise((r) => setTimeout(r, 400));
 await setQuery(page, "kind:fruit -colors:green calories:[10 TO 90]");
 await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
 await new Promise((r) => setTimeout(r, 200));
+const initialCommit = await committedQuery(page);
+if (initialCommit !== "kind:fruit -colors:green calories:[10 TO 90]") {
+  throw new Error(`blur did not commit the valid query: ${initialCommit}`);
+}
 await shoot(page, "01-resting", FIELD);
 
 const chip = await centerOf(page, 0);
@@ -71,10 +82,19 @@ await new Promise((r) => setTimeout(r, 200));
 const stillThere = await page.$(".fs-close");
 console.log("close survives pointer move onto it:", Boolean(stillThere));
 await shoot(page, "03-pointer-on-close", FIELD);
+await page.click('.fs-close[aria-label="Remove kind:fruit"]');
+await new Promise((r) => setTimeout(r, 200));
+const afterRemoval = "-colors:green calories:[10 TO 90]";
+if ((await committedQuery(page)) !== afterRemoval) {
+  throw new Error("chip removal did not commit the remaining query");
+}
 
 await page.mouse.move(5, 5);
 await setQuery(page, "co");
 await new Promise((r) => setTimeout(r, 350));
+if ((await committedQuery(page)) !== afterRemoval) {
+  throw new Error("draft typing changed the committed query");
+}
 const combobox = await page.$eval(INPUT, (input) => {
   const controls = input.getAttribute("aria-controls");
   const active = input.getAttribute("aria-activedescendant");
@@ -111,7 +131,17 @@ await setQuery(page, "kind:");
 await shoot(page, "06-typing-no-error", FIELD);
 await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
 await new Promise((r) => setTimeout(r, 250));
+if ((await committedQuery(page)) !== afterRemoval) {
+  throw new Error("an invalid blur executed a search");
+}
 await shoot(page, "07-blurred-error", ".fs-root");
+
+await setQuery(page, "kind:fruit");
+await page.keyboard.type(" ");
+await new Promise((r) => setTimeout(r, 200));
+if ((await committedQuery(page)) !== "kind:fruit") {
+  throw new Error("finishing a chip did not commit the query");
+}
 
 // Tab follows normal form navigation and reveals the first remove control.
 await setQuery(page, "kind:fruit colors:green");
@@ -151,6 +181,19 @@ await page.$$eval(".pg-skin", (buttons) => {
 await setQuery(page, "co");
 await new Promise((r) => setTimeout(r, 300));
 await shoot(page, "09-midnight-suggestions", ".pg");
+
+await setQuery(page, "kind:fruit and colors:green");
+const normalized = await page.$eval(
+  INPUT,
+  (input) => (input as HTMLInputElement).value,
+);
+if (normalized !== "kind:fruit AND colors:green") {
+  throw new Error(`lowercase operator was not normalized: ${normalized}`);
+}
+await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
+if ((await committedQuery(page)) !== normalized) {
+  throw new Error("the normalized query was not committed on blur");
+}
 
 await page.$$eval(".pg-skin", (buttons) => {
   const custom = buttons.find((button) => button.textContent === "Custom");

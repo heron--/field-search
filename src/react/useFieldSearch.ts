@@ -35,6 +35,14 @@ export interface SearchContext {
   ast: QueryNode | null;
   error: ParseError | null;
   segments: Segment[];
+  /** Empty queries are valid; incomplete or malformed queries are not. */
+  valid: boolean;
+}
+
+export interface SearchMutation {
+  value: string;
+  caret: number;
+  context: SearchContext;
 }
 
 export interface UseFieldSearchOptions {
@@ -59,9 +67,9 @@ export interface FieldSearchController {
   activeIndex: number;
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
   setCaret: (caret: number) => void;
-  commit: (value: string, caret: number) => void;
-  accept: (item: SuggestionItem) => void;
-  removeSegment: (segmentIndex: number) => void;
+  commit: (value: string, caret: number) => SearchMutation;
+  accept: (item: SuggestionItem) => SearchMutation | null;
+  removeSegment: (segmentIndex: number) => SearchMutation | null;
   pendingCaretRef: React.MutableRefObject<number | null>;
 }
 
@@ -77,6 +85,9 @@ export function createSearchContext(
     ast: next.validation.ast,
     error: next.validation.error,
     segments: next.segments,
+    valid:
+      next.validation.error === null &&
+      !next.segments.some((segment) => segment.error),
   };
 }
 
@@ -138,6 +149,8 @@ export function useFieldSearch({
       ast: validation.ast,
       error: validation.error,
       segments,
+      valid:
+        validation.error === null && !segments.some((segment) => segment.error),
     }),
     [caret, segments, target, validation.ast, validation.error],
   );
@@ -172,19 +185,21 @@ export function useFieldSearch({
 
   const commit = React.useCallback(
     (nextValue: string, nextCaret: number) => {
+      const nextContext = createSearchContext(nextValue, nextCaret);
       pendingCaretRef.current = nextCaret;
       setCaretState(nextCaret);
-      onValueChange(nextValue, createSearchContext(nextValue, nextCaret));
+      onValueChange(nextValue, nextContext);
+      return { value: nextValue, caret: nextCaret, context: nextContext };
     },
     [onValueChange],
   );
 
   const accept = React.useCallback(
     (item: SuggestionItem) => {
-      if (item.disabled) return;
+      if (item.disabled) return null;
       const head = value.slice(0, target.replaceFrom);
       const tail = value.slice(caret);
-      commit(
+      return commit(
         `${head}${item.insert}${tail}`,
         target.replaceFrom + item.insert.length,
       );
@@ -195,13 +210,13 @@ export function useFieldSearch({
   const removeSegment = React.useCallback(
     (segmentIndex: number) => {
       const segment = segments[segmentIndex];
-      if (!segment) return;
+      if (!segment) return null;
       const after = segments[segmentIndex + 1];
       const end = after?.kind === "space" ? after.end : segment.end;
       const before = segments[segmentIndex - 1];
       const start =
         !after && before?.kind === "space" ? before.start : segment.start;
-      commit(value.slice(0, start) + value.slice(end), start);
+      return commit(value.slice(0, start) + value.slice(end), start);
     },
     [commit, segments, value],
   );

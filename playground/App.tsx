@@ -116,18 +116,19 @@ const SKINS: { id: Skin; label: string; note: string }[] = [
 ];
 
 export default function App() {
-  const [query, setQuery] = React.useState("kind:fruit -colors:green");
+  const initialQuery = "kind:fruit -colors:green";
+  const [query, setQuery] = React.useState(initialQuery);
   const [context, setContext] = React.useState<SearchContext | null>(null);
-  const [searched, setSearched] = React.useState<string | null>(null);
+  const [searched, setSearched] = React.useState(initialQuery);
   const [skin, setSkin] = React.useState<Skin>("default");
   const results = React.useMemo(() => {
-    if (query.trim() === "") return PRODUCE;
+    if (searched.trim() === "") return PRODUCE;
     try {
-      return filterRecords(parse(query), PRODUCE);
+      return filterRecords(parse(searched), PRODUCE);
     } catch {
       return null;
     }
-  }, [query]);
+  }, [searched]);
 
   const roundTrip = React.useMemo(() => {
     if (query.trim() === "") return "";
@@ -144,7 +145,8 @@ export default function App() {
         <h1>field-search</h1>
         <p>
           Type a query. Chips are derived from the string itself — the input is
-          controlled by <code>value</code>, nothing else.
+          controlled by <code>value</code>, while results follow the last valid
+          search commit.
         </p>
       </header>
 
@@ -188,7 +190,10 @@ export default function App() {
             key={example.query}
             type="button"
             className="pg-example"
-            onClick={() => setQuery(example.query)}
+            onClick={() => {
+              setQuery(example.query);
+              setSearched(example.query);
+            }}
             title={example.note}
           >
             <span className="pg-example-label">{example.label}</span>
@@ -209,6 +214,8 @@ export default function App() {
             <dd>{context?.target.fragment || "—"}</dd>
             <dt>parses</dt>
             <dd>{context ? (context.ast ? "yes" : "no") : "—"}</dd>
+            <dt>valid</dt>
+            <dd>{context ? (context.valid ? "yes" : "no") : "—"}</dd>
           </dl>
           <p className="pg-note">
             This is what <code>onContextChange</code> hands you, so a caller
@@ -219,19 +226,19 @@ export default function App() {
         <div className="pg-panel">
           <h2>Round trip</h2>
           <code className="pg-roundtrip">{roundTrip || "—"}</code>
-          {searched && (
-            <p className="pg-note">
-              Last <kbd>Enter</kbd>: <code>{searched}</code>
-            </p>
-          )}
+          <p className="pg-note pg-committed">
+            Committed query: <code>{searched || "(all records)"}</code>
+          </p>
         </div>
       </section>
 
       <section>
         <h2 className="pg-results-head">
           {results === null
-            ? "Query is incomplete"
-            : `${results.length} of ${PRODUCE.length}`}
+            ? "Committed query is invalid"
+            : `${results.length} of ${PRODUCE.length}${
+                context && !context.valid ? " · showing previous search" : ""
+              }`}
         </h2>
         {results !== null && (
           <table className="pg-table">

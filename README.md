@@ -48,6 +48,25 @@ export function Search() {
 `SearchInput` forwards its ref to the native input and accepts native input
 attributes such as `id`, `name`, `disabled`, `required`, and ARIA labeling.
 
+### Draft and committed queries
+
+`onValueChange` reports every draft edit. `onSearch` is only called with a
+valid `SearchContext` and fires when the user:
+
+- presses Enter;
+- leaves the input;
+- accepts a suggestion or types a separator that completes a chip; or
+- removes a chip.
+
+Set `searchOnBlur`, `searchOnChipComplete`, or `searchOnRemove` to `false` to
+opt out of an automatic commit boundary. `context.valid` is `false` for an
+incomplete query such as `kind:`, so those drafts never execute a search. An
+empty query is valid and can be used to clear a search.
+
+Standalone `and` and `or` tokens are normalized to `AND` and `OR`, including
+inside grouped values. Quoted text and ordinary values such as `name:and` are
+left unchanged.
+
 ### Controlled and asynchronous suggestions
 
 `onContextChange` also fires when the caret moves. Use it to load suggestions,

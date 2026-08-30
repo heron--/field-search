@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { caretTarget, segment, segmentWithErrors } from "./segments";
+import {
+  caretTarget,
+  normalizeOperators,
+  segment,
+  segmentWithErrors,
+} from "./segments";
 
 /** Compact view: kind initial + text, so expectations read as the input does. */
 const sketch = (query: string) =>
@@ -175,6 +180,26 @@ describe("segmentWithErrors", () => {
     const { validation } = segmentWithErrors("kind:fruit");
     expect(validation.ast?.type).toBe("Query");
     expect(validation.ast?.children).toHaveLength(1);
+  });
+});
+
+describe("normalizeOperators", () => {
+  it("uppercases standalone lowercase boolean operators", () => {
+    expect(normalizeOperators("kind:fruit and colors:green or tropical")).toBe(
+      "kind:fruit AND colors:green OR tropical",
+    );
+  });
+
+  it("uppercases boolean operators inside grouped values", () => {
+    expect(normalizeOperators("colors:(red and blue or green)")).toBe(
+      "colors:(red AND blue OR green)",
+    );
+  });
+
+  it("does not change quoted text or ordinary field values", () => {
+    expect(normalizeOperators('name:and note:"red and blue"')).toBe(
+      'name:and note:"red and blue"',
+    );
   });
 });
 

@@ -21,8 +21,15 @@ export {
 } from "./useFieldSearch";
 export type {
   FieldSearchController,
+  SearchMutation,
   UseFieldSearchOptions,
 } from "./useFieldSearch";
 
-export { segment, segmentWithErrors, validate, caretTarget } from "./segments";
+export {
+  segment,
+  segmentWithErrors,
+  validate,
+  caretTarget,
+  normalizeOperators,
+} from "./segments";
 export type { Segment, SegmentKind, CaretTarget, Validation } from "./segments";

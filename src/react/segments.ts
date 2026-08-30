@@ -181,6 +181,74 @@ export function segment(query: string): Segment[] {
   return out;
 }
 
+function normalizeGroupedOperators(value: string): string {
+  let output = "";
+  let index = 0;
+  let quoted = false;
+
+  while (index < value.length) {
+    const char = value[index]!;
+    if (char === "\\") {
+      output += value.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      output += char;
+      index++;
+      continue;
+    }
+    if (!quoted && /[a-zA-Z]/.test(char)) {
+      const start = index;
+      while (index < value.length && /[a-zA-Z]/.test(value[index]!)) index++;
+      const word = value.slice(start, index);
+      const previous = value.slice(0, start).match(/\S(?=\s*$)/)?.[0];
+      if (
+        /^(and|or)$/i.test(word) &&
+        previous !== undefined &&
+        previous !== "("
+      ) {
+        output += word.toUpperCase();
+      } else {
+        output += word;
+      }
+      continue;
+    }
+    output += char;
+    index++;
+  }
+
+  return output;
+}
+
+/** Normalize standalone boolean words without changing quoted or field values. */
+export function normalizeOperators(query: string): string {
+  const segments = segment(query);
+  let output = "";
+
+  for (const current of segments) {
+    let text = current.text;
+    if (
+      current.kind === "chip" &&
+      current.colon < 0 &&
+      !current.negated &&
+      /^(and|or)$/i.test(text)
+    ) {
+      text = text.toUpperCase();
+    } else if (current.kind === "chip" && current.colon >= 0) {
+      const valueStart = current.colon + 1;
+      const value = text.slice(valueStart);
+      if (value.startsWith("(")) {
+        text = text.slice(0, valueStart) + normalizeGroupedOperators(value);
+      }
+    }
+    output += text;
+  }
+
+  return output;
+}
+
 /** Result of validating a query: the tree when it parses, the fault when not. */
 export interface Validation {
   ast: QueryNode | null;

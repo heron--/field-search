@@ -4,7 +4,11 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SearchInput, type SearchInputProps } from "./SearchInput";
+import {
+  SearchInput,
+  type SearchContext,
+  type SearchInputProps,
+} from "./SearchInput";
 
 vi.mock("@radix-ui/react-popover", async () => {
   const React = await import("react");
@@ -81,6 +85,7 @@ describe("SearchInput", () => {
     ref?: React.Ref<HTMLInputElement>,
   ) {
     const changes: string[] = [];
+    const contexts: SearchContext[] = [];
 
     function Harness() {
       const [value, setValue] = React.useState(props.value ?? "");
@@ -92,6 +97,7 @@ describe("SearchInput", () => {
           value={value}
           onValueChange={(next, context) => {
             changes.push(next);
+            contexts.push(context);
             setValue(next);
             props.onValueChange?.(next, context);
           }}
@@ -102,8 +108,25 @@ describe("SearchInput", () => {
     act(() => root.render(<Harness />));
     return {
       changes,
+      contexts,
       input: container.querySelector("input") as HTMLInputElement,
     };
+  }
+
+  function changeValue(
+    input: HTMLInputElement,
+    value: string,
+    caret = value.length,
+  ) {
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, value);
+      input.setSelectionRange(caret, caret);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
   }
 
   it("forwards its input ref and native attributes", () => {
@@ -157,8 +180,10 @@ describe("SearchInput", () => {
   });
 
   it("accepts the active suggestion with Enter", () => {
+    const onSearch = vi.fn();
     const { input, changes } = renderControlled({
       fields: [{ field: "kind" }],
+      onSearch,
     });
     act(() => input.focus());
 
@@ -173,6 +198,98 @@ describe("SearchInput", () => {
     });
 
     expect(changes).toEqual(["kind:"]);
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("searches when accepting a suggestion completes a valid chip", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({
+      value: "kind:f",
+      fields: [{ field: "kind", values: ["fruit"] }],
+      onSearch,
+    });
+    act(() => input.focus());
+
+    act(() => {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(onSearch).toHaveBeenCalledWith(
+      "kind:fruit",
+      expect.objectContaining({ valid: true }),
+    );
+  });
+
+  it("keeps ordinary value changes as drafts", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: "kind:f", onSearch });
+
+    changeValue(input, "kind:fr");
+
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("searches when whitespace completes a valid chip", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: "kind:fruit", onSearch });
+
+    changeValue(input, "kind:fruit ");
+
+    expect(onSearch).toHaveBeenCalledWith(
+      "kind:fruit ",
+      expect.objectContaining({ valid: true }),
+    );
+  });
+
+  it("does not treat whitespace inside a quoted value as chip completion", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: 'name:"granny"', onSearch });
+    const next = 'name:"granny "';
+
+    changeValue(input, next, next.length - 1);
+
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("searches when stepping over an auto-inserted closer completes a chip", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: 'name:"fruit"', onSearch });
+    input.setSelectionRange('name:"fruit'.length, 'name:"fruit'.length);
+
+    act(() => {
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: '"',
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(onSearch).toHaveBeenCalledWith(
+      'name:"fruit"',
+      expect.objectContaining({ valid: true }),
+    );
+  });
+
+  it("normalizes lowercase boolean operators without searching an incomplete query", () => {
+    const onSearch = vi.fn();
+    const { input, changes, contexts } = renderControlled({
+      value: "kind:fruit an",
+      onSearch,
+    });
+
+    changeValue(input, "kind:fruit and");
+
+    expect(changes).toEqual(["kind:fruit AND"]);
+    expect(contexts.at(-1)?.valid).toBe(false);
+    expect(onSearch).not.toHaveBeenCalled();
   });
 
   it("dismisses on Escape and reopens when typing resumes", () => {
@@ -223,6 +340,71 @@ describe("SearchInput", () => {
     expect(onSearch).not.toHaveBeenCalled();
   });
 
+  it("does not search an incomplete field value", () => {
+    const onSearch = vi.fn();
+    const onContextChange = vi.fn();
+    const { input } = renderControlled({
+      value: "kind:",
+      onSearch,
+      onContextChange,
+    });
+
+    act(() => {
+      input.focus();
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      input.blur();
+    });
+
+    expect(onContextChange).toHaveBeenCalledWith(
+      expect.objectContaining({ valid: false, ast: null }),
+    );
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("searches a valid query on Enter and blur", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: "kind:fruit", onSearch });
+
+    act(() => {
+      input.focus();
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      input.blur();
+    });
+
+    expect(onSearch).toHaveBeenCalledTimes(2);
+    expect(onSearch).toHaveBeenLastCalledWith(
+      "kind:fruit",
+      expect.objectContaining({ valid: true }),
+    );
+  });
+
+  it("does not treat focus moving to a remove control as leaving the component", () => {
+    const onSearch = vi.fn();
+    const { input } = renderControlled({ value: "kind:fruit", onSearch });
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove kind:fruit"]',
+    );
+
+    act(() => {
+      input.focus();
+      remove?.focus();
+    });
+
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
   it("associates parse errors with the input", () => {
     const { input } = renderControlled({ value: "kind:" });
     const error = container.querySelector('[role="alert"]');
@@ -240,6 +422,24 @@ describe("SearchInput", () => {
 
     expect(buttons).toHaveLength(2);
     expect(buttons[0]?.getAttribute("aria-label")).toBe("Remove kind:fruit");
+  });
+
+  it("searches the remaining valid query after chip removal", () => {
+    const onSearch = vi.fn();
+    renderControlled({
+      value: "kind:fruit colors:green",
+      onSearch,
+    });
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove kind:fruit"]',
+    );
+
+    act(() => remove?.click());
+
+    expect(onSearch).toHaveBeenCalledWith(
+      "colors:green",
+      expect.objectContaining({ valid: true }),
+    );
   });
 
   it("reports caret-only context changes", () => {
