@@ -1,0 +1,219 @@
+/** Optional default theme. Import `base.css` separately when using this file. */
+@layer field-search.theme {
+  :where(.fs-root) {
+    --fs-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    --fs-size: 14px;
+    --fs-line: 1.7;
+    --fs-pad-y: 10px;
+    --fs-pad-x: 12px;
+    --fs-gap: 0.45em;
+    --fs-chip-spread: 3px;
+    --fs-close-width: 12px;
+    --fs-fg: #1c1917;
+    --fs-muted: #78716c;
+    --fs-bg: #ffffff;
+    --fs-border: #d6d3d1;
+    --fs-radius: 10px;
+    --fs-focus: #7c3aed;
+    --fs-chip-bg: #f5f3ff;
+    --fs-chip-fg: #5b21b6;
+    --fs-chip-neg-bg: #fef2f2;
+    --fs-chip-neg-fg: #b91c1c;
+    --fs-chip-radius: 4px;
+    --fs-elevation:
+      0 6px 14px -2px rgb(0 0 0 / 0.28), 0 3px 6px -3px rgb(0 0 0 / 0.2);
+    --fs-punct: #a8a29e;
+    --fs-operator: #0369a1;
+    --fs-string: #15803d;
+    --fs-number: #b45309;
+    --fs-invalid: #dc2626;
+    --fs-suggestion-pad-y: 8px;
+    --fs-suggestion-pad-x: 12px;
+  }
+
+  :where(.fs-field) {
+    background: var(--fs-bg);
+    border: 1px solid var(--fs-border);
+    border-radius: var(--fs-radius);
+  }
+
+  :where(.fs-field:focus-within) {
+    border-color: var(--fs-focus);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--fs-focus) 18%, transparent);
+  }
+
+  :where(.fs-field[data-invalid="true"]) {
+    border-color: var(--fs-invalid);
+  }
+
+  :where(.fs-field[data-disabled="true"]) {
+    opacity: 0.6;
+  }
+
+  :where(.fs-native::placeholder) {
+    color: var(--fs-muted);
+  }
+
+  :where(.fs-native::selection) {
+    background: color-mix(in srgb, var(--fs-focus) 25%, transparent);
+  }
+
+  :where(.fs-chip) {
+    --fs-chip-current-bg: var(--fs-chip-bg);
+    border-radius: var(--fs-chip-radius);
+    background: var(--fs-chip-current-bg);
+    box-shadow: 0 0 0 var(--fs-chip-spread) var(--fs-chip-current-bg);
+    transition:
+      box-shadow 120ms ease,
+      background 120ms ease;
+  }
+
+  :where(.fs-chip[data-negated="true"]) {
+    --fs-chip-current-bg: var(--fs-chip-neg-bg);
+  }
+
+  :where(.fs-chip[data-hovered="true"]) {
+    border-start-end-radius: 0;
+    border-end-end-radius: 0;
+    box-shadow:
+      0 0 0 var(--fs-chip-spread) var(--fs-chip-current-bg),
+      var(--fs-elevation);
+  }
+
+  :where(.fs-chip[data-invalid="true"]) {
+    --fs-chip-current-bg: var(--fs-chip-neg-bg);
+    text-decoration: underline wavy var(--fs-invalid) from-font;
+    text-underline-offset: 3px;
+  }
+
+  :where(.fs-field-name) {
+    color: var(--fs-chip-fg);
+    font-weight: 600;
+  }
+
+  :where(.fs-negate) {
+    color: var(--fs-chip-neg-fg);
+    font-weight: 700;
+  }
+
+  :where(.fs-punct) {
+    color: var(--fs-punct);
+  }
+
+  :where(.fs-operator) {
+    color: var(--fs-operator);
+    font-weight: 600;
+  }
+
+  :where(.fs-string) {
+    color: var(--fs-string);
+  }
+
+  :where(.fs-number) {
+    color: var(--fs-number);
+  }
+
+  :where(.fs-top-paren) {
+    color: var(--fs-operator);
+    font-weight: 700;
+  }
+
+  :where(.fs-close) {
+    --fs-close-current-bg: var(--fs-chip-bg);
+    --fs-close-current-fg: var(--fs-chip-fg);
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+    border-start-end-radius: var(--fs-chip-radius);
+    border-end-end-radius: var(--fs-chip-radius);
+    background: var(--fs-close-current-bg);
+    color: var(--fs-close-current-fg);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    box-shadow: var(--fs-elevation);
+  }
+
+  :where(.fs-close[data-negated="true"]) {
+    --fs-close-current-bg: var(--fs-chip-neg-bg);
+    --fs-close-current-fg: var(--fs-chip-neg-fg);
+  }
+
+  :where(.fs-close:hover, .fs-close:focus-visible) {
+    background: color-mix(
+      in srgb,
+      var(--fs-close-current-bg) 78%,
+      var(--fs-close-current-fg)
+    );
+  }
+
+  :where(.fs-close:focus-visible) {
+    outline: none;
+    box-shadow:
+      inset 0 0 0 2px var(--fs-focus),
+      var(--fs-elevation);
+  }
+
+  :where(.fs-suggestions) {
+    background: var(--fs-bg);
+    border: 1px solid var(--fs-border);
+    border-radius: var(--fs-radius);
+    box-shadow:
+      0 10px 24px -6px rgb(0 0 0 / 0.2),
+      0 4px 8px -4px rgb(0 0 0 / 0.14);
+    color: var(--fs-fg);
+    font-family: var(--fs-font);
+    font-size: var(--fs-size);
+  }
+
+  :where(.fs-suggestions-header) {
+    padding: var(--fs-suggestion-pad-y) var(--fs-suggestion-pad-x);
+    border-bottom: 1px solid var(--fs-border);
+    color: var(--fs-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  :where(.fs-suggestion, .fs-suggestions-status) {
+    padding: var(--fs-suggestion-pad-y) var(--fs-suggestion-pad-x);
+    color: var(--fs-fg);
+  }
+
+  :where(.fs-suggestion[data-active="true"]) {
+    background: var(--fs-chip-bg);
+    color: var(--fs-chip-fg);
+  }
+
+  :where(.fs-suggestion[data-disabled="true"]) {
+    opacity: 0.5;
+  }
+
+  :where(.fs-suggestion-detail, .fs-suggestions-status) {
+    color: var(--fs-muted);
+    font-size: 12px;
+  }
+
+  :where(.fs-error) {
+    margin-block-start: 6px;
+    color: var(--fs-invalid);
+    font-family: var(--fs-font);
+    font-size: 12px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where(.fs-chip) {
+      transition: none;
+    }
+  }
+
+  @media (forced-colors: active) {
+    :where(.fs-field, .fs-suggestions) {
+      border-color: CanvasText;
+    }
+
+    :where(.fs-field:focus-within, .fs-close:focus-visible) {
+      outline: 2px solid Highlight;
+    }
+  }
+}

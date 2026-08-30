@@ -1,0 +1,114 @@
+/**
+ * Structural styles required by the styled SearchInput. Import this file even
+ * when providing a completely custom theme.
+ */
+@layer field-search.base {
+  :where(.fs-root) {
+    position: relative;
+    font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: var(--fs-size, 14px);
+  }
+
+  :where(.fs-root, .fs-root *) {
+    box-sizing: border-box;
+  }
+
+  :where(.fs-field) {
+    position: relative;
+    overflow: hidden;
+  }
+
+  :where(.fs-layer, .fs-native) {
+    font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: var(--fs-size, 14px);
+    line-height: var(--fs-line, 1.7);
+    letter-spacing: 0;
+    word-spacing: var(--fs-gap, 0.45em);
+    padding-block: var(--fs-pad-y, 10px);
+    padding-inline: var(--fs-pad-x, 12px);
+    white-space: pre;
+    tab-size: 4;
+  }
+
+  :where(.fs-layer) {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    overflow: hidden;
+    color: var(--fs-fg, #1c1917);
+  }
+
+  :where(.fs-native) {
+    position: relative;
+    z-index: 2;
+    display: block;
+    width: 100%;
+    margin: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--fs-fg, #1c1917);
+    overflow-x: auto;
+  }
+
+  :where(.fs-chip) {
+    position: relative;
+    box-shadow: 0 0 0 var(--fs-chip-spread, 3px) transparent;
+  }
+
+  :where(.fs-close) {
+    position: absolute;
+    z-index: 3;
+    display: grid;
+    place-items: center;
+    width: var(--fs-close-width, 12px);
+    padding: 0;
+    border: 0;
+    opacity: 0;
+    cursor: pointer;
+    pointer-events: none;
+    font: inherit;
+    font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  }
+
+  :where(.fs-close[data-visible="true"], .fs-close:focus-visible) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  :where(.fs-suggestions-wrap) {
+    z-index: var(--fs-suggestions-z, 50);
+  }
+
+  :where(.fs-suggestions) {
+    width: var(--radix-popover-trigger-width, 100%);
+    max-height: var(--fs-suggestions-max-height, 300px);
+    overflow-y: auto;
+  }
+
+  :where(.fs-suggestion) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--fs-suggestion-gap, 12px);
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  :where(.fs-suggestion[data-disabled="true"]) {
+    cursor: not-allowed;
+  }
+
+  @media (hover: none) {
+    :where(.fs-close) {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
