@@ -5,6 +5,7 @@ import { Chip, type ChipClassNames } from "./Chip";
 import { Suggestions, type SuggestionClassNames } from "./Suggestions";
 import { normalizeOperators, type Segment } from "./segments";
 import {
+  createSearchContext,
   useFieldSearch,
   type FieldSuggestion,
   type SearchContext,
@@ -88,7 +89,15 @@ export interface SearchInputProps extends Omit<
 
 const PAIRS: Record<string, string> = { '"': '"', "(": ")", "[": "]" };
 const CLOSERS: Record<string, true> = { '"': true, ")": true, "]": true };
-const DEFAULT_GEOMETRY = { spread: 3, closeWidth: 12 };
+const CARET_KEYS = new Set([
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+  "Home",
+  "End",
+]);
+const DEFAULT_GEOMETRY = { spread: 3, closeWidth: 16 };
 const useIsomorphicLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;
 
@@ -152,6 +161,29 @@ function endsWithNewSeparator(
   );
 }
 
+/**
+ * Normalize completed operators while leaving the word at the caret alone.
+ * A draft ending in `or` may still become `origin`; typing a separator makes
+ * the operator unambiguous and allows `normalizeOperators` to uppercase it.
+ */
+function normalizeEditingOperators(value: string, caret: number) {
+  const beforeCaret = value.slice(0, caret);
+  const activeOperator = beforeCaret.match(/(^|[\s(])(and|or)$/i)?.[2];
+  if (!activeOperator) return normalizeOperators(value);
+
+  const start = caret - activeOperator.length;
+  const masked =
+    value.slice(0, start) +
+    "_".repeat(activeOperator.length) +
+    value.slice(caret);
+  const normalized = normalizeOperators(masked);
+  return (
+    normalized.slice(0, start) +
+    value.slice(start, caret) +
+    normalized.slice(caret)
+  );
+}
+
 /** A styled convenience component built on the headless `useFieldSearch` API. */
 export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput(
@@ -197,6 +229,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       onClick,
       onSelect,
       onScroll,
+      onPointerDown,
       "aria-describedby": ariaDescribedBy,
       "aria-invalid": ariaInvalid,
       ...inputProps
@@ -207,11 +240,14 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
     const layerRef = React.useRef<HTMLDivElement>(null);
     const fieldRef = React.useRef<HTMLDivElement>(null);
     const rootRef = React.useRef<HTMLDivElement>(null);
+    const closeRef = React.useRef<HTMLButtonElement>(null);
     const chipRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
+    const pendingRemoveFocusRef = React.useRef(false);
     const geometry = React.useRef(DEFAULT_GEOMETRY);
     const [inputFocused, setInputFocused] = React.useState(false);
     const [dismissed, setDismissed] = React.useState(false);
     const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null);
+    const [dismissedByTyping, setDismissedByTyping] = React.useState(false);
     const [measurements, setMeasurements] = React.useState<Measured[]>([]);
 
     const controller = useFieldSearch({
@@ -260,7 +296,8 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       if (!field) return;
       const bounds = field.getBoundingClientRect();
       const direction = getComputedStyle(field).direction;
-      const { spread } = geometry.current;
+      const borderInlineEnd =
+        field.offsetWidth - field.clientWidth - field.clientLeft;
       const next: Measured[] = [];
 
       for (let index = 0; index < chipRefs.current.length; index++) {
@@ -271,10 +308,10 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
           index,
           inlineStart:
             direction === "rtl"
-              ? bounds.right - rect.left + spread
-              : rect.right - bounds.left + spread,
-          top: rect.top - bounds.top - spread,
-          height: rect.height + spread * 2,
+              ? bounds.right - rect.right - borderInlineEnd
+              : rect.left - bounds.left - field.clientLeft,
+          top: rect.top - bounds.top - field.clientTop,
+          height: rect.height,
         });
       }
       setMeasurements(next);
@@ -290,6 +327,22 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       for (const chip of chipRefs.current) if (chip) observer.observe(chip);
       return () => observer.disconnect();
     }, [measureChips, value]);
+
+    React.useEffect(() => {
+      setDismissedByTyping(false);
+    }, [hoveredIndex]);
+
+    useIsomorphicLayoutEffect(() => {
+      if (!pendingRemoveFocusRef.current) return;
+      pendingRemoveFocusRef.current = false;
+      closeRef.current?.focus();
+    });
+
+    const focusRemove = (index: number) => {
+      pendingRemoveFocusRef.current = true;
+      setDismissedByTyping(false);
+      setHoveredIndex(index);
+    };
 
     const syncCaret = React.useCallback(() => {
       controller.setCaret(inputRef.current?.selectionStart ?? 0);
@@ -327,6 +380,25 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       setHoveredIndex(null);
     };
 
+    const handlePointerDown = (event: React.PointerEvent<HTMLInputElement>) => {
+      if (event.pointerType !== "mouse") {
+        const { clientX, clientY } = event;
+        const { spread } = geometry.current;
+        const touchedIndex = chipRefs.current.findIndex((node) => {
+          if (!node) return false;
+          const rect = node.getBoundingClientRect();
+          return (
+            clientX >= rect.left - spread &&
+            clientX <= rect.right + spread &&
+            clientY >= rect.top - spread &&
+            clientY <= rect.bottom + spread
+          );
+        });
+        setHoveredIndex(touchedIndex >= 0 ? touchedIndex : null);
+      }
+      onPointerDown?.(event);
+    };
+
     const syncScroll = (event: React.UIEvent<HTMLInputElement>) => {
       const layer = layerRef.current;
       if (layer) layer.scrollLeft = event.currentTarget.scrollLeft;
@@ -336,7 +408,20 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
 
     const choose = (item: SuggestionItem, index: number) => {
       if (readOnly || disabled) return;
-      const mutation = controller.accept(item);
+      const target = controller.context.target;
+      const head = value.slice(0, target.replaceFrom);
+      const tail = value.slice(controller.caret);
+      const acceptedValue = `${head}${item.insert}${tail}`;
+      const acceptedCaret = target.replaceFrom + item.insert.length;
+      const completesFinalValue =
+        item.insert.length > 0 &&
+        !/\s$/.test(item.insert) &&
+        tail.length === 0 &&
+        createSearchContext(acceptedValue, acceptedCaret).valid;
+      const acceptedItem = completesFinalValue
+        ? { ...item, insert: `${item.insert} ` }
+        : item;
+      const mutation = controller.accept(acceptedItem);
       setDismissed(false);
       onSuggestionSelect?.(item, index);
       if (searchOnChipComplete && mutation?.context.valid) {
@@ -358,6 +443,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
     const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
       onKeyDown?.(event);
       if (event.defaultPrevented || event.nativeEvent.isComposing) return;
+      if (CARET_KEYS.has(event.key)) setDismissedByTyping(true);
 
       if (open && event.key === "ArrowDown") {
         event.preventDefault();
@@ -388,6 +474,17 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
         setDismissed(true);
         return;
       }
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !readOnly &&
+        !disabled &&
+        measurements[0]
+      ) {
+        event.preventDefault();
+        focusRemove(measurements[0].index);
+        return;
+      }
       if (event.key === "Enter") {
         event.preventDefault();
         if (controller.context.valid) onSearch?.(value, controller.context);
@@ -415,10 +512,42 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       }
     };
 
+    const handleRemoveKeyDown = (
+      event: React.KeyboardEvent<HTMLButtonElement>,
+      measurement: Measured,
+    ) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setHoveredIndex(null);
+        inputRef.current?.focus();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const position = measurements.findIndex(
+        (current) => current.index === measurement.index,
+      );
+      const next = measurements[position + (event.shiftKey ? -1 : 1)];
+      if (next) {
+        event.preventDefault();
+        focusRemove(next.index);
+      } else if (event.shiftKey) {
+        event.preventDefault();
+        setHoveredIndex(null);
+        inputRef.current?.focus();
+      }
+    };
+
     const Root = slots.root ?? "div";
     const Field = slots.field ?? "div";
     const Layer = slots.layer ?? "div";
     const ErrorSlot = slots.error ?? "div";
+    const activeMeasurement = measurements.find(
+      (measurement) => measurement.index === hoveredIndex,
+    );
+    const activeSegment = activeMeasurement
+      ? controller.segments[activeMeasurement.index]
+      : undefined;
     const header =
       typeof suggestionsHeader === "function"
         ? suggestionsHeader(controller.context)
@@ -482,6 +611,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                 {controller.segments.map((segment, index) => {
                   if (segment.kind === "chip") {
                     const hovered = hoveredIndex === index;
+                    const overlayShowing = hovered && !dismissedByTyping;
                     return (
                       <Chip
                         key={`${segment.start}-${segment.text}`}
@@ -493,6 +623,9 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                         showError={revealErrors}
                         className={classNames.chip}
                         classNames={chipClassNames}
+                        style={{
+                          visibility: overlayShowing ? "hidden" : undefined,
+                        }}
                       >
                         {renderChip?.(segment, {
                           index,
@@ -544,10 +677,14 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                 aria-describedby={describedBy || undefined}
                 onChange={(event) => {
                   const rawValue = event.currentTarget.value;
-                  const nextValue = normalizeOperators(rawValue);
                   const position =
                     event.currentTarget.selectionStart ?? rawValue.length;
+                  const nextValue = normalizeEditingOperators(
+                    rawValue,
+                    position,
+                  );
                   setDismissed(false);
+                  setDismissedByTyping(true);
                   const mutation = controller.commit(nextValue, position);
                   if (
                     searchOnChipComplete &&
@@ -562,6 +699,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                     onSearch?.(mutation.value, mutation.context);
                   }
                 }}
+                onPointerDown={handlePointerDown}
                 onKeyDown={handleKeyDown}
                 onKeyUp={(event) => {
                   syncCaret();
@@ -600,35 +738,57 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                 }}
               />
 
-              {measurements.map((measurement) => {
-                const segment = controller.segments[measurement.index];
-                if (!segment || segment.kind !== "chip") return null;
-                return (
-                  <button
-                    key={`remove-${segment.start}-${segment.text}`}
-                    type="button"
-                    className={join("fs-close", classNames.close)}
-                    data-slot="remove"
-                    data-visible={
-                      hoveredIndex === measurement.index || undefined
-                    }
-                    data-negated={segment.negated || undefined}
-                    style={{
-                      insetInlineStart: measurement.inlineStart,
-                      top: measurement.top,
-                      height: measurement.height,
-                    }}
-                    disabled={disabled || readOnly}
-                    aria-label={`Remove ${segment.text}`}
-                    onFocus={() => setHoveredIndex(measurement.index)}
-                    onBlur={() => setHoveredIndex(null)}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => remove(segment, measurement.index)}
-                  >
-                    <span aria-hidden="true">×</span>
-                  </button>
-                );
-              })}
+              {activeMeasurement &&
+                activeSegment?.kind === "chip" &&
+                !dismissedByTyping &&
+                (() => {
+                  const invalid = Boolean(revealErrors && activeSegment.error);
+                  return (
+                    <Chip
+                      segment={activeSegment}
+                      hovered
+                      showError={revealErrors}
+                      className={classNames.chip}
+                      classNames={chipClassNames}
+                      style={
+                        {
+                          "--fs-active-chip-inline-start": `${activeMeasurement.inlineStart}px`,
+                          "--fs-active-chip-top": `${activeMeasurement.top}px`,
+                          "--fs-active-chip-height": `${activeMeasurement.height}px`,
+                        } as React.CSSProperties
+                      }
+                      end={
+                        <button
+                          ref={closeRef}
+                          type="button"
+                          className={join("fs-close", classNames.close)}
+                          data-slot="remove"
+                          disabled={disabled || readOnly}
+                          aria-label={`Remove ${activeSegment.text}`}
+                          onFocus={() =>
+                            setHoveredIndex(activeMeasurement.index)
+                          }
+                          onBlur={() => setHoveredIndex(null)}
+                          onKeyDown={(event) =>
+                            handleRemoveKeyDown(event, activeMeasurement)
+                          }
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() =>
+                            remove(activeSegment, activeMeasurement.index)
+                          }
+                        >
+                          <span aria-hidden="true">×</span>
+                        </button>
+                      }
+                    >
+                      {renderChip?.(activeSegment, {
+                        index: activeMeasurement.index,
+                        hovered: true,
+                        invalid,
+                      })}
+                    </Chip>
+                  );
+                })()}
             </Field>
           </Popover.Anchor>
 

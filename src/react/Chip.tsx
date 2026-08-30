@@ -98,6 +98,13 @@ export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
   /** Errors stay hidden while the field has focus; see SearchInput. */
   showError?: boolean;
   classNames?: ChipClassNames;
+  /**
+   * Trailing content rendered inside the chip's own box, after its text —
+   * e.g. a remove control. Keeping it inside the same element means it
+   * automatically shares the chip's background, radius, and elevation
+   * instead of needing separately coordinated styling.
+   */
+  end?: React.ReactNode;
 }
 
 /**
@@ -120,6 +127,7 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
     classNames = {},
     children,
     title,
+    end,
     ...props
   },
   ref,
@@ -144,54 +152,57 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
     return undefined;
   };
 
+  const content = children ?? (
+    <>
+      {negated && (
+        <span
+          className={join("fs-negate", classNames.negate)}
+          data-slot="chip-negate"
+        >
+          -
+        </span>
+      )}
+      {hasField && (
+        <>
+          <span
+            className={join("fs-field-name", classNames.field)}
+            data-slot="chip-field"
+          >
+            {field}
+          </span>
+          <span
+            className={join("fs-punct", classNames.punctuation)}
+            data-slot="chip-punctuation"
+          >
+            :
+          </span>
+        </>
+      )}
+      {highlightValue(value).map((piece, index) => (
+        <span
+          key={index}
+          className={pieceClassName(piece)}
+          data-slot="chip-value"
+        >
+          {piece.text}
+        </span>
+      ))}
+    </>
+  );
+
   return (
     <span
       {...props}
       ref={ref}
-      className={join("fs-chip", className)}
+      className={join(end ? "fs-chip fs-active-chip" : "fs-chip", className)}
       data-slot="chip"
       data-negated={negated || undefined}
       data-hovered={hovered || undefined}
       data-invalid={fault ? true : undefined}
       title={title ?? fault}
     >
-      {children ?? (
-        <>
-          {negated && (
-            <span
-              className={join("fs-negate", classNames.negate)}
-              data-slot="chip-negate"
-            >
-              -
-            </span>
-          )}
-          {hasField && (
-            <>
-              <span
-                className={join("fs-field-name", classNames.field)}
-                data-slot="chip-field"
-              >
-                {field}
-              </span>
-              <span
-                className={join("fs-punct", classNames.punctuation)}
-                data-slot="chip-punctuation"
-              >
-                :
-              </span>
-            </>
-          )}
-          {highlightValue(value).map((piece, index) => (
-            <span
-              key={index}
-              className={pieceClassName(piece)}
-              data-slot="chip-value"
-            >
-              {piece.text}
-            </span>
-          ))}
-        </>
-      )}
+      {end ? <span aria-hidden="true">{content}</span> : content}
+      {end}
     </span>
   );
 });

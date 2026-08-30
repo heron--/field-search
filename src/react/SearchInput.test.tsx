@@ -129,6 +129,18 @@ describe("SearchInput", () => {
     });
   }
 
+  function hoverFirstChip(input: HTMLInputElement) {
+    act(() => {
+      input.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          clientX: 0,
+          clientY: 0,
+        }),
+      );
+    });
+  }
+
   it("forwards its input ref and native attributes", () => {
     const ref = React.createRef<HTMLInputElement>();
     const { input } = renderControlled(
@@ -201,9 +213,9 @@ describe("SearchInput", () => {
     expect(onSearch).not.toHaveBeenCalled();
   });
 
-  it("searches when accepting a suggestion completes a valid chip", () => {
+  it("adds a space and searches when a value suggestion completes a chip", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({
+    const { input, changes } = renderControlled({
       value: "kind:f",
       fields: [{ field: "kind", values: ["fruit"] }],
       onSearch,
@@ -220,8 +232,9 @@ describe("SearchInput", () => {
       );
     });
 
+    expect(changes).toEqual(["kind:fruit "]);
     expect(onSearch).toHaveBeenCalledWith(
-      "kind:fruit",
+      "kind:fruit ",
       expect.objectContaining({ valid: true }),
     );
   });
@@ -278,7 +291,7 @@ describe("SearchInput", () => {
     );
   });
 
-  it("normalizes lowercase boolean operators without searching an incomplete query", () => {
+  it("normalizes lowercase boolean operators after a separator completes them", () => {
     const onSearch = vi.fn();
     const { input, changes, contexts } = renderControlled({
       value: "kind:fruit an",
@@ -286,10 +299,21 @@ describe("SearchInput", () => {
     });
 
     changeValue(input, "kind:fruit and");
+    changeValue(input, "kind:fruit and ");
 
-    expect(changes).toEqual(["kind:fruit AND"]);
+    expect(changes).toEqual(["kind:fruit and", "kind:fruit AND "]);
     expect(contexts.at(-1)?.valid).toBe(false);
     expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  it("does not normalize an operator prefix while a field is being typed", () => {
+    const { input, changes } = renderControlled();
+
+    changeValue(input, "or");
+    changeValue(input, "ori");
+    changeValue(input, "origin:");
+
+    expect(changes).toEqual(["or", "ori", "origin:"]);
   });
 
   it("dismisses on Escape and reopens when typing resumes", () => {
@@ -393,6 +417,7 @@ describe("SearchInput", () => {
   it("does not treat focus moving to a remove control as leaving the component", () => {
     const onSearch = vi.fn();
     const { input } = renderControlled({ value: "kind:fruit", onSearch });
+    hoverFirstChip(input);
     const remove = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Remove kind:fruit"]',
     );
@@ -414,22 +439,28 @@ describe("SearchInput", () => {
     expect(input.getAttribute("aria-describedby")).toBe(error?.id);
   });
 
-  it("renders an accessible removal control for every chip", () => {
-    renderControlled({ value: "kind:fruit colors:green" });
+  it("renders one accessible removal control for the active chip", () => {
+    const { input } = renderControlled({
+      value: "kind:fruit colors:green",
+    });
+    expect(container.querySelector('[data-slot="remove"]')).toBeNull();
+
+    hoverFirstChip(input);
     const buttons = container.querySelectorAll<HTMLButtonElement>(
       'button[data-slot="remove"]',
     );
 
-    expect(buttons).toHaveLength(2);
+    expect(buttons).toHaveLength(1);
     expect(buttons[0]?.getAttribute("aria-label")).toBe("Remove kind:fruit");
   });
 
   it("searches the remaining valid query after chip removal", () => {
     const onSearch = vi.fn();
-    renderControlled({
+    const { input } = renderControlled({
       value: "kind:fruit colors:green",
       onSearch,
     });
+    hoverFirstChip(input);
     const remove = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Remove kind:fruit"]',
     );
