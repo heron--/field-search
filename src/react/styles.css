@@ -1,0 +1,12 @@
+/**
+ * field-search — everything. The easy path:
+ *
+ *   import "field-search/styles.css";
+ *
+ * If you want to bring your own visuals, import only the structural half and
+ * style `.fs-*` yourself:
+ *
+ *   import "field-search/layout.css";
+ */
+@import "./layout.css";
+@import "./theme.css";

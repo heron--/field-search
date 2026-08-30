@@ -1,0 +1,229 @@
+/**
+ * field-search — default theme. OPTIONAL.
+ *
+ * Skip this file entirely and style `.fs-*` yourself, or keep it and override
+ * the tokens below. Nothing here is load-bearing; layout.css is what the
+ * component actually needs to function.
+ *
+ * To retheme, redeclare any token on your own wrapper:
+ *
+ *   .my-search {
+ *     --fs-chip-bg: #1e293b;
+ *     --fs-chip-fg: #a5b4fc;
+ *     --fs-fg: #f1f5f9;
+ *     --fs-bg: #0f172a;
+ *   }
+ *
+ * Two tokens are geometry rather than colour, and SearchInput reads them back
+ * from the DOM so JS and CSS cannot drift apart:
+ *
+ *   --fs-chip-spread   how far the pill paints outside its text box
+ *   --fs-close-width   width of the close section appended on hover
+ *
+ * The gap between chips must stay wide enough to hold the close section:
+ * `space glyph + --fs-gap >= --fs-chip-spread + --fs-close-width`. Note that
+ * --fs-gap also widens spaces *inside* a chip, because an input cannot space
+ * one character differently from another.
+ */
+
+.fs-theme {
+  /* type + metrics */
+  --fs-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --fs-size: 14px;
+  --fs-line: 1.7;
+  --fs-pad-y: 10px;
+  --fs-pad-x: 12px;
+  --fs-gap: 0.45em;
+
+  /* geometry, read back by SearchInput */
+  --fs-chip-spread: 3px;
+  --fs-close-width: 12px;
+
+  /* surface */
+  --fs-fg: #1c1917;
+  --fs-muted: #78716c;
+  --fs-bg: #ffffff;
+  --fs-border: #d6d3d1;
+  --fs-radius: 10px;
+  --fs-focus: #7c3aed;
+
+  /* chips */
+  --fs-chip-bg: #f5f3ff;
+  --fs-chip-fg: #5b21b6;
+  --fs-chip-neg-bg: #fef2f2;
+  --fs-chip-neg-fg: #b91c1c;
+  --fs-chip-radius: 4px;
+  --fs-elevation:
+    0 6px 14px -2px rgb(0 0 0 / 0.28), 0 3px 6px -3px rgb(0 0 0 / 0.2);
+
+  /* syntax */
+  --fs-punct: #a8a29e;
+  --fs-operator: #0369a1;
+  --fs-string: #15803d;
+  --fs-number: #b45309;
+  --fs-invalid: #dc2626;
+}
+
+/* ---------- field ---------- */
+
+.fs-theme .fs-field,
+.fs-field.fs-theme {
+  background: var(--fs-bg);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius);
+}
+
+.fs-theme .fs-field:focus-within {
+  border-color: var(--fs-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fs-focus) 18%, transparent);
+}
+
+.fs-theme .fs-field[data-invalid="true"] {
+  border-color: var(--fs-invalid);
+}
+
+.fs-theme .fs-native::placeholder {
+  color: var(--fs-muted);
+}
+
+.fs-theme .fs-native::selection {
+  background: color-mix(in srgb, var(--fs-focus) 25%, transparent);
+}
+
+/* ---------- chips ---------- */
+
+.fs-theme .fs-chip {
+  --chip-bg: var(--fs-chip-bg);
+  border-radius: var(--fs-chip-radius);
+  background: var(--chip-bg);
+  box-shadow: 0 0 0 var(--fs-chip-spread) var(--chip-bg);
+  transition:
+    box-shadow 120ms ease,
+    background 120ms ease;
+}
+
+.fs-theme .fs-chip[data-negated="true"] {
+  --chip-bg: var(--fs-chip-neg-bg);
+}
+
+/* While hovered the chip grows a close section on its right, so square that
+   corner off and let the button supply the rounding — the two then read as a
+   single extended rounded rectangle. */
+.fs-theme .fs-chip[data-hovered="true"] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow:
+    0 0 0 var(--fs-chip-spread) var(--chip-bg),
+    var(--fs-elevation);
+}
+
+.fs-theme .fs-chip[data-invalid="true"] {
+  --chip-bg: var(--fs-chip-neg-bg);
+  text-decoration: underline wavy var(--fs-invalid) from-font;
+  text-underline-offset: 3px;
+}
+
+/* ---------- syntax ---------- */
+
+.fs-theme .fs-field-name {
+  color: var(--fs-chip-fg);
+  font-weight: 600;
+}
+
+.fs-theme .fs-negate {
+  color: var(--fs-chip-neg-fg);
+  font-weight: 700;
+}
+
+.fs-theme .fs-punct {
+  color: var(--fs-punct);
+}
+
+.fs-theme .fs-operator {
+  color: var(--fs-operator);
+  font-weight: 600;
+}
+
+.fs-theme .fs-string {
+  color: var(--fs-string);
+}
+
+.fs-theme .fs-number {
+  color: var(--fs-number);
+}
+
+.fs-theme .fs-top-paren {
+  color: var(--fs-operator);
+  font-weight: 700;
+}
+
+/* ---------- close section ---------- */
+
+/* Colours track the chip it belongs to, in every state: hover deepens the
+   chip's own hue rather than switching to a different one. */
+.fs-theme .fs-close {
+  --close-bg: var(--fs-chip-bg);
+  --close-fg: var(--fs-chip-fg);
+  border-radius: 0 var(--fs-chip-radius) var(--fs-chip-radius) 0;
+  background: var(--close-bg);
+  color: var(--close-fg);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--fs-elevation);
+}
+
+.fs-theme .fs-close[data-negated="true"] {
+  --close-bg: var(--fs-chip-neg-bg);
+  --close-fg: var(--fs-chip-neg-fg);
+}
+
+.fs-theme .fs-close:hover {
+  background: color-mix(in srgb, var(--close-bg) 78%, var(--close-fg));
+}
+
+/* ---------- suggestions ---------- */
+
+.fs-theme.fs-suggestions-wrap .fs-suggestions,
+.fs-theme .fs-suggestions {
+  background: var(--fs-bg);
+  border: 1px solid var(--fs-border);
+  border-radius: var(--fs-radius);
+  box-shadow:
+    0 10px 24px -6px rgb(0 0 0 / 0.2),
+    0 4px 8px -4px rgb(0 0 0 / 0.14);
+  font-family: var(--fs-font);
+  font-size: var(--fs-size);
+}
+
+.fs-theme .fs-suggestions-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--fs-border);
+  color: var(--fs-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fs-theme .fs-suggestion {
+  padding: 8px 12px;
+  color: var(--fs-fg);
+}
+
+.fs-theme .fs-suggestion[data-active="true"] {
+  background: var(--fs-chip-bg);
+  color: var(--fs-chip-fg);
+}
+
+.fs-theme .fs-suggestion-detail {
+  color: var(--fs-muted);
+  font-size: 12px;
+}
+
+.fs-theme .fs-error {
+  margin-top: 6px;
+  color: var(--fs-invalid);
+  font-family: var(--fs-font);
+  font-size: 12px;
+}

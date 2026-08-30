@@ -1,0 +1,142 @@
+import * as React from "react";
+import type { Segment } from "./segments";
+
+/**
+ * A highlighted piece of chip text.
+ *
+ * Highlighting runs over the raw source rather than the AST, because a chip is
+ * frequently mid-edit and will not parse. Quoted runs are emitted whole, which
+ * is what keeps a paren inside a string from being painted as punctuation.
+ */
+interface Piece {
+  cls: string;
+  text: string;
+}
+
+const PUNCT = "()[]<>=:";
+const KEYWORDS: Record<string, true> = { AND: true, OR: true, TO: true };
+const NUMBER = /^-?\d+(\.\d+)?$/;
+
+/** Split the value side of a chip into classified pieces. */
+function highlightValue(value: string): Piece[] {
+  const pieces: Piece[] = [];
+  let buffer = "";
+
+  const flush = () => {
+    if (buffer === "") return;
+    const cls = KEYWORDS[buffer]
+      ? "fs-operator"
+      : NUMBER.test(buffer)
+        ? "fs-number"
+        : "";
+    pieces.push({ cls, text: buffer });
+    buffer = "";
+  };
+
+  let i = 0;
+  while (i < value.length) {
+    const ch = value[i]!;
+
+    if (ch === "\\") {
+      buffer += value.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+
+    if (ch === '"') {
+      flush();
+      const start = i;
+      i++;
+      while (i < value.length) {
+        if (value[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (value[i] === '"') {
+          i++;
+          break;
+        }
+        i++;
+      }
+      pieces.push({ cls: "fs-string", text: value.slice(start, i) });
+      continue;
+    }
+
+    if (PUNCT.includes(ch)) {
+      flush();
+      pieces.push({ cls: "fs-punct", text: ch });
+      i++;
+      continue;
+    }
+
+    if (ch === " ") {
+      flush();
+      pieces.push({ cls: "", text: ch });
+      i++;
+      continue;
+    }
+
+    buffer += ch;
+    i++;
+  }
+
+  flush();
+  return pieces;
+}
+export interface ChipProps {
+  segment: Segment;
+  hovered: boolean;
+  /** Errors stay hidden while the field has focus; see SearchInput. */
+  showError?: boolean;
+  /** Appended to `fs-chip`, for styling without the bundled theme. */
+  className?: string;
+  /** Assigned by the input so it can measure the chip for the close section. */
+  elementRef?: (node: HTMLSpanElement | null) => void;
+}
+
+/**
+ * One chip: a bare term, or a `field:value` filter.
+ *
+ * Renders inside a `pointer-events: none` layer sitting behind a transparent
+ * input, so it carries no interaction of its own — hover is tracked by the
+ * input via hit-testing, and the close button is rendered above the input.
+ */
+export function Chip({
+  segment,
+  hovered,
+  showError = true,
+  className,
+  elementRef,
+}: ChipProps) {
+  const { text, colon, negated, error } = segment;
+  const fault = showError ? error : undefined;
+
+  const head = negated ? 1 : 0;
+  const hasField = colon >= 0;
+  const field = hasField ? text.slice(head, colon) : "";
+  const value = hasField ? text.slice(colon + 1) : text.slice(head);
+
+  return (
+    <span
+      ref={elementRef}
+      className={className ? `fs-chip ${className}` : "fs-chip"}
+      data-negated={negated || undefined}
+      data-hovered={hovered || undefined}
+      data-invalid={fault ? true : undefined}
+      title={fault}
+    >
+      {negated && <span className="fs-negate">-</span>}
+      {hasField && (
+        <>
+          <span className="fs-field-name">{field}</span>
+          <span className="fs-punct">:</span>
+        </>
+      )}
+      {highlightValue(value).map((piece, index) => (
+        <span key={index} className={piece.cls || undefined}>
+          {piece.text}
+        </span>
+      ))}
+    </span>
+  );
+}
