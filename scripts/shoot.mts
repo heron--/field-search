@@ -86,6 +86,7 @@ const CHIPS = `[...document.querySelectorAll(".fs-chip")].map((chip) => {
     left: +box.left.toFixed(2),
     right: +box.right.toFixed(2),
     top: Math.round(box.top),
+    bottom: box.bottom,
     padStart: +(text.left - box.left).toFixed(2),
     padEnd: +(box.right - text.right).toFixed(2),
   };
@@ -103,6 +104,7 @@ const CLOSES = `[...document.querySelectorAll(".fs-close")].map((node) => {
       (button.top + button.bottom) / 2 - (chip.top + chip.bottom) / 2
     ).toFixed(1),
     flushEnd: +(chip.right - button.right).toFixed(1),
+    opacity: getComputedStyle(node).opacity,
     centre: {
       x: button.left + button.width / 2,
       y: button.top + button.height / 2,
@@ -164,6 +166,7 @@ interface ChipBox {
   left: number;
   right: number;
   top: number;
+  bottom: number;
   padStart: number;
   padEnd: number;
 }
@@ -175,6 +178,7 @@ interface CloseBox {
   fillsHeight: boolean;
   offCenter: number;
   flushEnd: number;
+  opacity: string;
   centre: { x: number; y: number };
 }
 
@@ -356,6 +360,19 @@ const steps: Step[] = [
       await context.blur();
       await context.shoot("01-resting", FIELD);
 
+      /**
+       * Whether the chip holds room for the remove control or grows to make it
+       * depends on whether the browser reports a hover. Headless runners
+       * disagree — a laptop reports one, CI does not — and neither CDP media
+       * emulation nor the Blink pointer settings override it. So the step
+       * checks whichever branch is live and says which, rather than asserting
+       * one and failing wherever the other applies.
+       */
+      const hoverable = (await context.page.evaluate(
+        'matchMedia("(hover: hover)").matches',
+      )) as boolean;
+      context.note("pointer", hoverable ? "hover" : "none (coarse branch)");
+
       const chips = await context.chips();
       context.note("chips", chips.length);
       check(chips.length === 3, `expected 3 chips, got ${chips.length}`);
@@ -363,10 +380,20 @@ const steps: Step[] = [
         chips.every((chip) => chip.padStart >= 3),
         "chips have no leading padding",
       );
-      check(
-        chips.every((chip) => chip.padEnd >= 3),
-        "chips reserve no room for the remove control",
-      );
+      if (hoverable) {
+        // Compact at rest: no room held open for a control that is not shown,
+        // so the trailing padding is only the chip's own.
+        check(
+          chips.every((chip) => Math.abs(chip.padEnd - chip.padStart) <= 0.5),
+          `chips hold room open at rest: ${chips.map((c) => c.padEnd).join(", ")}`,
+        );
+      } else {
+        // Nothing to hover with, so the room stays open and the control shows.
+        check(
+          chips.every((chip) => chip.padEnd > chip.padStart),
+          "chips hold no room for an always-visible control",
+        );
+      }
       check(
         new Set(chips.map((chip) => chip.top)).size === 1,
         "chips are not on one line",
@@ -376,26 +403,17 @@ const steps: Step[] = [
         check(gap >= 1, `chips ${index} and ${index + 1} collide`);
       }
 
-      const closes = await context.closes();
-      check(closes.length === 3, `expected 3 remove controls`);
+      const resting = await context.closes();
+      check(resting.length === 3, `expected 3 remove controls`);
+      // Easy to break without noticing: every other check here passes either
+      // way, so the reveal has to be asserted on its own.
       check(
-        closes.every((close) => close.inside),
-        "remove controls are not seated inside their chips",
-      );
-      check(
-        closes.every((close) => close.fillsHeight),
-        "remove controls do not fill their chip's height",
-      );
-      check(
-        closes.every((close) => Math.abs(close.offCenter) <= 0.5),
-        "remove controls are not vertically centred",
-      );
-      check(
-        closes.every((close) => Math.abs(close.flushEnd) <= 0.5),
-        "remove controls are not flush with the chip's trailing edge",
+        resting.every((close) => close.opacity === (hoverable ? "0" : "1")),
+        `remove controls are ${hoverable ? "visible at rest" : "hidden with no hover to reveal them"}: ${resting.map((c) => c.opacity).join(", ")}`,
       );
 
-      // Hover must not move a single glyph.
+      if (!hoverable) return;
+
       const first = chips[0]!;
       await context.page.mouse.move(
         (first.left + first.right) / 2,
@@ -405,13 +423,58 @@ const steps: Step[] = [
         )) + 20,
       );
       await context.shoot("02-hover-close", FIELD);
+
+      const revealed = await context.closes();
+      check(
+        revealed[0]?.opacity === "1",
+        `hovering a chip did not reveal its remove control: ${revealed[0]?.opacity}`,
+      );
+      check(
+        revealed.slice(1).every((close) => close.opacity === "0"),
+        "hovering one chip revealed the others' remove controls",
+      );
+
+      // Geometry is only meaningful once the chip has grown around the control.
+      const control = revealed[0]!;
+      check(control.inside, "the remove control is not inside its chip");
+      check(control.fillsHeight, "the remove control does not fill the chip");
+      check(
+        Math.abs(control.offCenter) <= 0.5,
+        "the remove control is not vertically centred",
+      );
+      check(
+        Math.abs(control.flushEnd) <= 0.5,
+        "the remove control is not flush with the chip's trailing edge",
+      );
+
+      // Only the trailing edge moves, so the pointer that triggered the growth
+      // stays inside the chip it grew.
       const hovered = await context.chips();
-      for (const [index, chip] of hovered.entries()) {
+      const growth = hovered[0]!.right - chips[0]!.right;
+      context.note("hover growth", growth);
+      check(
+        Math.abs(hovered[0]!.left - chips[0]!.left) <= 0.5,
+        "hovering moved the chip's leading edge",
+      );
+      check(growth > 0, "hovering did not grow the chip");
+      // Growth is less than the control's width, because the hovered padding
+      // replaces the chip's own trailing padding rather than adding to it. What
+      // has to hold is that the control now fits in that padding.
+      check(
+        hovered[0]!.padEnd >= control.width,
+        `the control needs ${control.width}px but has ${hovered[0]!.padEnd}px`,
+      );
+      for (const [index, chip] of hovered.slice(1).entries()) {
+        const shift = chip.left - chips[index + 1]!.left;
         check(
-          Math.abs(chip.left - chips[index]!.left) <= 0.5,
-          `hover reflowed chip ${index}`,
+          Math.abs(shift - growth) <= 0.5,
+          `chip ${index + 1} shifted ${shift}px, expected ${growth}px`,
         );
       }
+      check(
+        new Set(hovered.map((chip) => chip.top)).size === 1,
+        "growing a chip pushed another onto a second line",
+      );
     },
   },
 
@@ -648,7 +711,17 @@ const steps: Step[] = [
     async run(context) {
       await context.setQuery(RESTING);
       await context.blur();
-      await context.page.click('.fs-close[aria-label="Remove kind:fruit"]');
+
+      // The control is inert until hovering the chip reveals it, so reach it
+      // the way a pointer does: over the chip first, then onto the control.
+      const [chip] = await context.chips();
+      check(chip, "no chip to remove");
+      const middle = (chip.top + chip.bottom) / 2;
+      await context.page.mouse.move((chip.left + chip.right) / 2, middle);
+      const [control] = await context.closes();
+      check(control, "hovering did not reveal a remove control");
+      await context.page.mouse.click(control.centre.x, control.centre.y);
+
       await context.waitForCommitted("-colors:green calories:[10 TO 90]");
     },
   },
@@ -665,6 +738,11 @@ const steps: Step[] = [
         });
         await context.setQuery("kind:fruit colors:green");
 
+        check(
+          await context.page.evaluate('matchMedia("(hover: none)").matches'),
+          "the mobile viewport still reports a hover",
+        );
+
         const overflows = await context.page.evaluate(
           "document.documentElement.scrollWidth > window.innerWidth",
         );
@@ -679,6 +757,11 @@ const steps: Step[] = [
         check(
           closes.every((close) => close.width >= 24),
           "remove controls are below the 24px touch target",
+        );
+        // No hover to reveal them with, so they have to be visible already.
+        check(
+          closes.every((close) => close.opacity === "1"),
+          "remove controls are hidden on a device that cannot hover",
         );
 
         await context.shoot("04-mobile", ".pg-search");

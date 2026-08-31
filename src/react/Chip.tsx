@@ -213,7 +213,7 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
     >
       {content}
       {end && (
-        <span className="fs-close-anchor" data-fs-nontext="" aria-hidden="true">
+        <span className="fs-close-anchor" data-fs-nontext="">
           {end}
         </span>
       )}
