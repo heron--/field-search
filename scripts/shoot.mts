@@ -360,6 +360,15 @@ const steps: Step[] = [
       await context.blur();
       await context.shoot("01-resting", FIELD);
 
+      // Guards the emulation itself: without it this step silently checks the
+      // coarse-pointer behaviour instead, which is what CI was doing.
+      check(
+        await context.page.evaluate(
+          'matchMedia("(hover: hover) and (pointer: fine)").matches',
+        ),
+        "the harness is not emulating a fine pointer",
+      );
+
       const chips = await context.chips();
       context.note("chips", chips.length);
       check(chips.length === 3, `expected 3 chips, got ${chips.length}`);
@@ -708,12 +717,20 @@ const steps: Step[] = [
     async run(context) {
       try {
         await context.page.setViewport(MOBILE);
+        await emulatePointer("coarse");
         await context.page.reload({ waitUntil: "domcontentloaded" });
         await context.page.waitForSelector(EDITOR);
         await context.page.addStyleTag({
           content: "*{transition:none !important}",
         });
         await context.setQuery("kind:fruit colors:green");
+
+        check(
+          await context.page.evaluate(
+            'matchMedia("(hover: none) and (pointer: coarse)").matches',
+          ),
+          "the harness is not emulating a coarse pointer",
+        );
 
         const overflows = await context.page.evaluate(
           "document.documentElement.scrollWidth > window.innerWidth",
@@ -746,6 +763,7 @@ const steps: Step[] = [
         await context.waitForQuery("colors:green");
       } finally {
         await context.page.setViewport(DESKTOP);
+        await emulatePointer("fine");
         await context.page.reload({ waitUntil: "domcontentloaded" });
         await context.page.waitForSelector(EDITOR);
         await context.page.addStyleTag({
@@ -868,6 +886,23 @@ if (process.env.THROTTLE) {
   await page.emulateCPUThrottling(Number(process.env.THROTTLE));
 }
 await page.setViewport(DESKTOP);
+/**
+ * Headless runners disagree about whether they have a pointer: CI reports a
+ * coarse one where a laptop reports fine, which silently swaps the hover
+ * behaviour under test. Say which it is rather than inherit it.
+ *
+ * Puppeteer only whitelists the `prefers-*` features, so this goes to CDP.
+ */
+const emulation = await page.createCDPSession();
+async function emulatePointer(kind: "fine" | "coarse") {
+  await emulation.send("Emulation.setEmulatedMedia", {
+    features: [
+      { name: "hover", value: kind === "fine" ? "hover" : "none" },
+      { name: "pointer", value: kind },
+    ],
+  });
+}
+await emulatePointer("fine");
 
 const pageProblems: { step: string; text: string }[] = [];
 let currentStep = "startup";
