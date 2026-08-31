@@ -30,8 +30,6 @@ export interface SearchInputClassNames {
   field?: string;
   /** The editable element. */
   editor?: string;
-  /** @deprecated Renamed to `editor`. Still applied to the editable element. */
-  input?: string;
   chip?: string;
   close?: string;
   operator?: string;
@@ -715,10 +713,7 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
                 {...editorProps}
                 ref={setEditorRef}
                 id={editorId}
-                className={join(
-                  "fs-editor",
-                  classes(classNames.editor, classNames.input),
-                )}
+                className={join("fs-editor", classNames.editor)}
                 data-slot="editor"
                 contentEditable={
                   editable

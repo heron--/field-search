@@ -266,7 +266,7 @@ lays out the characters the caret moves through:
 </div>
 ```
 
-Two consequences are worth knowing about:
+Three consequences are worth knowing about:
 
 - **Chips have a real box model.** Padding, gaps, a radius, and interactive
   children all work, because there is no second copy of the string to stay
@@ -274,8 +274,8 @@ Two consequences are worth knowing about:
 - **The rendered text must equal the query.** Every segment tiles the string end
   to end, and offsets are derived by walking text nodes. Anything you render via
   `renderChip` has to concatenate back to `segment.text`; a development-only
-  check reports drift. Chrome for the editor's own furniture is excluded by
-  marking it `data-fs-nontext`, which is why the remove buttons cost no offsets.
+  check reports drift. The editor's own furniture is excluded by marking it
+  `data-fs-nontext`, which is why the remove buttons cost no offsets.
 - **A chip must never be positioned.** A positioned inline paints in the
   positioned-descendants phase, which comes _after_ the text phase the browser
   draws the caret in — so a `position` on `.fs-chip` makes its background paint
@@ -505,8 +505,7 @@ Theme the input by setting custom properties on its root or a wrapper:
 }
 ```
 
-Chip geometry is now genuinely adjustable, which it was not while the field was
-a transparent input over a highlight layer:
+Chip geometry is adjustable too:
 
 ```css
 .inventory-search {
@@ -525,34 +524,6 @@ do not give `.fs-chip` a `position`, or the caret disappears behind it. Anything
 needing a containing block inside a chip belongs on `.fs-close-anchor`.
 
 `layout.css` remains as a compatibility alias for `base.css`.
-
-## Migrating from the overlay input
-
-Before v0.1 the field was a transparent `<input>` layered over a highlight
-layer. It is now a single `contenteditable` element.
-
-| Before                                 | Now                                                            |
-| -------------------------------------- | -------------------------------------------------------------- |
-| ref is an `HTMLInputElement`           | ref is the editable `HTMLDivElement`                           |
-| `.fs-native`, `.fs-layer`              | `.fs-editor`                                                   |
-| `.fs-active-chip`                      | gone; `.fs-chip` is styled in place                            |
-| `data-slot="input"`                    | `data-slot="editor"`                                           |
-| `data-slot="highlight-layer"`          | gone                                                           |
-| `classNames.input`, `classNames.layer` | `classNames.editor` (`input` still applies, deprecated)        |
-| `slots.layer`                          | gone                                                           |
-| `--fs-chip-spread`                     | gone; hover is plain CSS rather than JS hit-testing            |
-| close control placed by JS geometry    | `.fs-close-anchor` gives it a containing block                 |
-| `onChange`, `onSelect`                 | `onValueChange`, `onContextChange`                             |
-| `SearchContext.caret`                  | still present; `SearchContext.selection` adds anchor and focus |
-| `controller.pendingCaretRef`           | `controller.pendingSelectionRef`                               |
-| `input`-only props (`inputMode`, …)    | still accepted; `div` attributes now too                       |
-
-Only one chip carried a remove control at a time, revealed by hover. Every chip
-now has its own, so keyboard traversal and touch removal need no emulation. They
-still appear on hover, and the room for them is reserved at rest, so revealing
-one never reflows the text under the pointer. Where there is no hover to give —
-a coarse pointer — they stay visible, and `--fs-close-idle-opacity` overrides
-that either way.
 
 ## Contributing
 
