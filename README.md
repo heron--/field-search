@@ -505,6 +505,19 @@ Theme the input by setting custom properties on its root or a wrapper:
 }
 ```
 
+The editor defaults to `14px` above `767px` and `16px` at or below that
+breakpoint so mobile browsers do not zoom when it receives focus. Configure
+the sizes independently with `--fs-size-desktop` and `--fs-size-mobile`:
+
+```css
+.inventory-search {
+  --fs-size-desktop: 13px;
+  --fs-size-mobile: 18px;
+}
+```
+
+`--fs-size` remains available when one size should apply at every viewport.
+
 Chip geometry is adjustable too. The remove control appears on hover and the
 chip grows to fit it, so these tokens set both its size and how much the chip
 grows by. Where there is no hover to reveal it — a coarse pointer — the room

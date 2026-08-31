@@ -2,7 +2,8 @@
 @layer field-search.theme {
   :where(.fs-root) {
     --fs-font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-    --fs-size: 14px;
+    --fs-size-desktop: 14px;
+    --fs-size-mobile: 16px;
     --fs-line: 1.7;
     --fs-pad-y: 10px;
     --fs-pad-x: 12px;

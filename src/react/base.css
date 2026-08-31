@@ -4,9 +4,16 @@
  */
 @layer field-search.base {
   :where(.fs-root) {
+    --fs-size: var(--fs-size-desktop, 14px);
     position: relative;
     font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: var(--fs-size, 14px);
+    font-size: var(--fs-size);
+  }
+
+  @media (max-width: 767px) {
+    :where(.fs-root) {
+      --fs-size: var(--fs-size-mobile, 16px);
+    }
   }
 
   :where(.fs-root, .fs-root *) {
@@ -29,14 +36,14 @@
   :where(.fs-editor) {
     display: block;
     width: 100%;
-    min-height: calc(var(--fs-size, 14px) * var(--fs-line, 1.7));
+    min-height: calc(var(--fs-size) * var(--fs-line, 1.7));
     margin: 0;
     border: 0;
     outline: none;
     padding-block: var(--fs-pad-y, 10px);
     padding-inline: var(--fs-pad-x, 12px);
     font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: var(--fs-size, 14px);
+    font-size: var(--fs-size);
     line-height: var(--fs-line, 1.7);
     letter-spacing: 0;
     white-space: pre;
