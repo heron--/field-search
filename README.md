@@ -551,6 +551,11 @@ Only one chip carried a remove control at a time, revealed by hover. Every chip
 now has its own, always present, so keyboard traversal and touch removal need no
 emulation. Set `--fs-close-idle-opacity: 0` to keep the hover-only appearance.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), and [docs/testing.md](docs/testing.md)
+for how the two test tiers divide up.
+
 ## Development
 
 ```sh
