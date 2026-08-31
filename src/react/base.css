@@ -18,88 +18,103 @@
     overflow: hidden;
   }
 
-  :where(.fs-layer, .fs-native) {
+  /**
+   * The editable field. Its own text is the query, so chips are laid out by the
+   * same pass that lays out the characters the caret moves through — there is
+   * no second copy of the string to keep aligned, and chip geometry is free.
+   *
+   * `pre` keeps the field to one line and scrolls it. Switching to `pre-wrap`
+   * is all that a wrapping field needs.
+   */
+  :where(.fs-editor) {
+    display: block;
+    width: 100%;
+    min-height: calc(var(--fs-size, 14px) * var(--fs-line, 1.7));
+    margin: 0;
+    border: 0;
+    outline: none;
+    padding-block: var(--fs-pad-y, 10px);
+    padding-inline: var(--fs-pad-x, 12px);
     font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
     font-size: var(--fs-size, 14px);
     line-height: var(--fs-line, 1.7);
     letter-spacing: 0;
-    padding-block: var(--fs-pad-y, 10px);
-    padding-inline: var(--fs-pad-x, 12px);
     white-space: pre;
     tab-size: 4;
-  }
-
-  :where(.fs-layer) {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    overflow: hidden;
-    color: var(--fs-fg, #1c1917);
-  }
-
-  :where(.fs-native) {
-    position: relative;
-    z-index: 2;
-    display: block;
-    width: 100%;
-    margin: 0;
-    border: 0;
-    outline: none;
     background: transparent;
-    color: transparent;
+    color: var(--fs-fg, #1c1917);
     caret-color: var(--fs-fg, #1c1917);
     overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  :where(.fs-editor)::-webkit-scrollbar {
+    height: 0;
+  }
+
+  :where(.fs-editor[data-empty])::before {
+    content: attr(data-placeholder);
+    pointer-events: none;
   }
 
   :where(.fs-chip) {
+    padding-inline: var(--fs-chip-pad-x, 5px);
+    padding-block: var(--fs-chip-pad-y, 4px);
+    margin-inline: var(--fs-chip-gap, 0px);
+  }
+
+  /**
+   * Room for the remove control is reserved permanently, so revealing it never
+   * reflows the text sitting under the pointer.
+   */
+  :where(.fs-chip[data-removable]) {
+    padding-inline-end: calc(
+      var(--fs-close-width, 16px) + var(--fs-close-gap, 2px)
+    );
+  }
+
+  /**
+   * The chip itself must NOT be positioned. A positioned inline paints in the
+   * positioned-descendants phase — after the text phase the caret is drawn in —
+   * so its background would paint straight over the caret.
+   *
+   * So the containing block comes from this anchor instead: it holds no text of
+   * its own, carries the chip's vertical padding so its box matches the chip's,
+   * and sits at the end of the chip's text with the reserved room to its right.
+   */
+  :where(.fs-close-anchor) {
     position: relative;
-    padding-inline: var(--fs-chip-pad-x, 1px);
-    margin-inline: calc(-1 * var(--fs-chip-pad-x, 1px));
     padding-block: var(--fs-chip-pad-y, 4px);
   }
 
-  :where(.fs-active-chip) {
-    position: absolute;
-    inset-inline-start: var(--fs-active-chip-inline-start);
-    top: var(--fs-active-chip-top);
-    z-index: 3;
-    display: inline-flex;
-    align-items: center;
-    height: var(--fs-active-chip-height);
-    margin-inline: 0;
-    padding-inline-end: 0;
-    overflow: hidden;
-    color: var(--fs-fg, #1c1917);
-    font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: var(--fs-size, 14px);
-    line-height: normal;
-    letter-spacing: 0;
-    white-space: pre;
-    pointer-events: none;
-  }
-
-  :where(.fs-active-chip > :first-child) {
-    display: inline-flex;
-    align-items: center;
-    flex: none;
-    padding-inline-end: var(--fs-chip-pad-x, 1px);
-  }
-
   :where(.fs-close) {
-    position: static;
-    flex: none;
-    height: 100%;
+    position: absolute;
+    inset-block: 0;
+    inset-inline-start: var(--fs-close-gap, 2px);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: var(--fs-close-width, 12px);
+    width: var(--fs-close-width, 16px);
     padding: 0;
     border: 0;
-    cursor: pointer;
-    pointer-events: auto;
+    background: transparent;
+    color: inherit;
     font: inherit;
-    font-family: var(--fs-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    opacity: var(--fs-close-idle-opacity, 0.45);
+  }
+
+  :where(.fs-chip:hover, .fs-chip[data-hovered="true"]) > :where(.fs-close),
+  :where(.fs-close:hover, .fs-close:focus-visible) {
+    opacity: 1;
+  }
+
+  :where(.fs-close) > svg {
+    width: var(--fs-close-icon, 0.72em);
+    height: var(--fs-close-icon, 0.72em);
   }
 
   :where(.fs-suggestions-wrap) {

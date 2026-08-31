@@ -1,6 +1,8 @@
 import * as React from "react";
 import type { QueryNode } from "../ast";
 import type { ParseError } from "../parser";
+import { useHistory } from "./history";
+import { collapsed, ordered, type EditorSelection } from "./selection";
 import {
   caretTarget,
   segmentWithErrors,
@@ -29,8 +31,10 @@ export interface SuggestionItem {
 
 /** The current editing and parsing state. */
 export interface SearchContext {
-  /** Caret offset into `value`. */
+  /** Caret offset into `value`. Equal to `selection.focus`. */
   caret: number;
+  /** Full selection. Collapsed when nothing is selected. */
+  selection: EditorSelection;
   target: CaretTarget;
   ast: QueryNode | null;
   error: ParseError | null;
@@ -42,7 +46,17 @@ export interface SearchContext {
 export interface SearchMutation {
   value: string;
   caret: number;
+  selection: EditorSelection;
   context: SearchContext;
+}
+
+export interface CommitOptions {
+  /**
+   * How the edit enters the undo stack. `coalesce` merges it into the previous
+   * run of coalesced edits, which is what keeps typing from producing one undo
+   * step per character. `skip` is for applying history itself.
+   */
+  history?: "push" | "coalesce" | "skip";
 }
 
 export interface UseFieldSearchOptions {
@@ -57,6 +71,7 @@ export interface UseFieldSearchOptions {
 
 export interface FieldSearchController {
   caret: number;
+  selection: EditorSelection;
   context: SearchContext;
   segments: Segment[];
   items: SuggestionItem[];
@@ -67,21 +82,35 @@ export interface FieldSearchController {
   activeIndex: number;
   setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
   setCaret: (caret: number) => void;
-  commit: (value: string, caret: number) => SearchMutation;
+  setSelection: (selection: EditorSelection) => void;
+  commit: (
+    value: string,
+    selection: number | EditorSelection,
+    options?: CommitOptions,
+  ) => SearchMutation;
   accept: (item: SuggestionItem) => SearchMutation | null;
   removeSegment: (segmentIndex: number) => SearchMutation | null;
-  pendingCaretRef: React.MutableRefObject<number | null>;
+  undo: () => SearchMutation | null;
+  redo: () => SearchMutation | null;
+  /**
+   * Selection to restore once the render driven by the last `commit` has been
+   * applied to the DOM. Read and clear it from a layout effect.
+   */
+  pendingSelectionRef: React.MutableRefObject<EditorSelection | null>;
 }
 
 /** Build the context passed through the public callbacks. */
 export function createSearchContext(
   value: string,
-  caret: number,
+  selection: number | EditorSelection,
 ): SearchContext {
+  const resolved =
+    typeof selection === "number" ? collapsed(selection) : selection;
   const next = segmentWithErrors(value);
   return {
-    caret,
-    target: caretTarget(value, caret),
+    caret: resolved.focus,
+    selection: resolved,
+    target: caretTarget(value, resolved.focus),
     ast: next.validation.ast,
     error: next.validation.error,
     segments: next.segments,
@@ -133,9 +162,23 @@ export function useFieldSearch({
   suggestions,
   onContextChange,
 }: UseFieldSearchOptions): FieldSearchController {
-  const [caret, setCaretState] = React.useState(0);
+  const [selectionState, setSelectionState] = React.useState<EditorSelection>(
+    () => collapsed(0),
+  );
   const [activeIndex, setActiveIndex] = React.useState(0);
-  const pendingCaretRef = React.useRef<number | null>(null);
+  const pendingSelectionRef = React.useRef<EditorSelection | null>(null);
+  const history = useHistory(value);
+
+  // Clamping here rather than in the setter keeps the setter free of any
+  // dependency on the current value, so listeners never need re-subscribing.
+  const selection = React.useMemo<EditorSelection>(
+    () => ({
+      anchor: Math.max(0, Math.min(selectionState.anchor, value.length)),
+      focus: Math.max(0, Math.min(selectionState.focus, value.length)),
+    }),
+    [selectionState, value.length],
+  );
+  const caret = selection.focus;
 
   const { segments, validation } = React.useMemo(
     () => segmentWithErrors(value),
@@ -145,6 +188,7 @@ export function useFieldSearch({
   const context = React.useMemo<SearchContext>(
     () => ({
       caret,
+      selection,
       target,
       ast: validation.ast,
       error: validation.error,
@@ -152,7 +196,7 @@ export function useFieldSearch({
       valid:
         validation.error === null && !segments.some((segment) => segment.error),
     }),
-    [caret, segments, target, validation.ast, validation.error],
+    [caret, segments, selection, target, validation.ast, validation.error],
   );
 
   const derivedItems = React.useMemo(
@@ -176,35 +220,68 @@ export function useFieldSearch({
     });
   }, [items]);
 
+  const setSelection = React.useCallback((next: EditorSelection) => {
+    setSelectionState((current) =>
+      current.anchor === next.anchor && current.focus === next.focus
+        ? current
+        : { anchor: next.anchor, focus: next.focus },
+    );
+  }, []);
+
   const setCaret = React.useCallback(
-    (nextCaret: number) => {
-      setCaretState(Math.max(0, Math.min(nextCaret, value.length)));
-    },
-    [value.length],
+    (next: number) => setSelection(collapsed(next)),
+    [setSelection],
   );
 
   const commit = React.useCallback(
-    (nextValue: string, nextCaret: number) => {
-      const nextContext = createSearchContext(nextValue, nextCaret);
-      pendingCaretRef.current = nextCaret;
-      setCaretState(nextCaret);
+    (
+      nextValue: string,
+      nextSelection: number | EditorSelection,
+      options?: CommitOptions,
+    ): SearchMutation => {
+      const resolved =
+        typeof nextSelection === "number"
+          ? collapsed(nextSelection)
+          : nextSelection;
+      const nextContext = createSearchContext(nextValue, resolved);
+      pendingSelectionRef.current = resolved;
+      setSelectionState(resolved);
+      if (options?.history !== "skip") {
+        history.record(
+          { value: nextValue, selection: resolved },
+          options?.history ?? "push",
+        );
+      }
       onValueChange(nextValue, nextContext);
-      return { value: nextValue, caret: nextCaret, context: nextContext };
+      return {
+        value: nextValue,
+        caret: resolved.focus,
+        selection: resolved,
+        context: nextContext,
+      };
     },
-    [onValueChange],
+    [history, onValueChange],
   );
+
+  // A value replaced from outside — a reset button, a saved search — is a state
+  // worth returning to, so it joins the stack too. Values this controller
+  // committed are already recorded and land here as a no-op.
+  React.useEffect(() => {
+    history.record({ value, selection: collapsed(value.length) });
+  }, [history, value]);
 
   const accept = React.useCallback(
     (item: SuggestionItem) => {
       if (item.disabled) return null;
+      const { end } = ordered(selection);
       const head = value.slice(0, target.replaceFrom);
-      const tail = value.slice(caret);
+      const tail = value.slice(Math.max(end, target.replaceFrom));
       return commit(
         `${head}${item.insert}${tail}`,
         target.replaceFrom + item.insert.length,
       );
     },
-    [caret, commit, target.replaceFrom, value],
+    [commit, selection, target.replaceFrom, value],
   );
 
   const removeSegment = React.useCallback(
@@ -221,8 +298,21 @@ export function useFieldSearch({
     [commit, segments, value],
   );
 
+  const undo = React.useCallback(() => {
+    const entry = history.undo();
+    if (!entry) return null;
+    return commit(entry.value, entry.selection, { history: "skip" });
+  }, [commit, history]);
+
+  const redo = React.useCallback(() => {
+    const entry = history.redo();
+    if (!entry) return null;
+    return commit(entry.value, entry.selection, { history: "skip" });
+  }, [commit, history]);
+
   return {
     caret,
+    selection,
     context,
     segments,
     items,
@@ -230,9 +320,14 @@ export function useFieldSearch({
     activeIndex,
     setActiveIndex,
     setCaret,
+    setSelection,
     commit,
     accept,
     removeSegment,
-    pendingCaretRef,
+    undo,
+    redo,
+    pendingSelectionRef,
   };
 }
+
+export type { EditorSelection } from "./selection";

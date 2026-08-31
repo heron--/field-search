@@ -4,6 +4,7 @@ import * as React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applySelection, readText } from "./selection";
 import {
   SearchInput,
   type SearchContext,
@@ -57,14 +58,6 @@ vi.mock("@radix-ui/react-popover", async () => {
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-globalThis.ResizeObserver = ResizeObserverStub;
-
 describe("SearchInput", () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -82,7 +75,7 @@ describe("SearchInput", () => {
 
   function renderControlled(
     props: Partial<SearchInputProps> = {},
-    ref?: React.Ref<HTMLInputElement>,
+    ref?: React.Ref<HTMLDivElement>,
   ) {
     const changes: string[] = [];
     const contexts: SearchContext[] = [];
@@ -106,108 +99,284 @@ describe("SearchInput", () => {
     }
 
     act(() => root.render(<Harness />));
-    return {
-      changes,
-      contexts,
-      input: container.querySelector("input") as HTMLInputElement,
-    };
+    const editor = container.querySelector(
+      '[data-slot="editor"]',
+    ) as HTMLDivElement;
+    act(() => editor.focus());
+    return { changes, contexts, editor };
   }
 
-  function changeValue(
-    input: HTMLInputElement,
-    value: string,
-    caret = value.length,
-  ) {
+  /** Move the caret, the way a click or an arrow key would. */
+  function caretAt(editor: HTMLElement, offset: number, focus = offset) {
     act(() => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(input, value);
-      input.setSelectionRange(caret, caret);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      applySelection(editor, { anchor: offset, focus });
+      editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
     });
   }
 
-  function hoverFirstChip(input: HTMLInputElement) {
+  /** Dispatch the native `beforeinput` the component listens for. */
+  function edit(
+    editor: HTMLElement,
+    inputType: string,
+    data?: string,
+    at?: { anchor: number; focus: number },
+  ) {
     act(() => {
-      input.dispatchEvent(
-        new MouseEvent("mousemove", {
+      if (at) applySelection(editor, at);
+      editor.dispatchEvent(
+        new InputEvent("beforeinput", {
           bubbles: true,
-          clientX: 0,
-          clientY: 0,
+          cancelable: true,
+          inputType,
+          data,
         }),
       );
     });
   }
 
-  it("forwards its input ref and native attributes", () => {
-    const ref = React.createRef<HTMLInputElement>();
-    const { input } = renderControlled(
+  function type(
+    editor: HTMLElement,
+    text: string,
+    at?: { anchor: number; focus: number },
+  ) {
+    for (const [index, character] of [...text].entries()) {
+      edit(editor, "insertText", character, index === 0 ? at : undefined);
+    }
+  }
+
+  function press(
+    editor: HTMLElement,
+    key: string,
+    init: KeyboardEventInit = {},
+  ) {
+    let allowed = true;
+    act(() => {
+      allowed = editor.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key,
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    });
+    return allowed;
+  }
+
+  it("forwards its ref to the editable element and passes attributes through", () => {
+    const ref = React.createRef<HTMLDivElement>();
+    const { editor } = renderControlled(
       { name: "query", required: true, inputMode: "search" },
       ref,
     );
 
-    expect(ref.current).toBe(input);
-    expect(input.name).toBe("query");
-    expect(input.required).toBe(true);
-    expect(input.inputMode).toBe("search");
-    expect(input.getAttribute("role")).toBe("combobox");
+    expect(ref.current).toBe(editor);
+    expect(editor.getAttribute("role")).toBe("combobox");
+    expect(editor.getAttribute("contenteditable")).toBe("true");
+    expect(editor.getAttribute("aria-multiline")).toBe("false");
+    expect(editor.getAttribute("aria-required")).toBe("true");
+    expect(editor.getAttribute("inputmode")).toBe("search");
     expect(
-      container.querySelector('[data-slot="highlight-layer"]'),
-    ).not.toBeNull();
+      container.querySelector<HTMLInputElement>('input[type="hidden"]')?.name,
+    ).toBe("query");
+  });
+
+  it("shows the placeholder only while the query is empty", () => {
+    const { editor } = renderControlled({ placeholder: "kind:fruit" });
+    expect(editor.getAttribute("data-placeholder")).toBe("kind:fruit");
+    expect(editor.hasAttribute("data-empty")).toBe(true);
+
+    type(editor, "k");
+    expect(editor.hasAttribute("data-empty")).toBe(false);
   });
 
   it("uses an accessible combobox/listbox relationship", () => {
-    const { input } = renderControlled({
+    const { editor } = renderControlled({
       fields: [{ field: "kind", detail: "text" }],
     });
 
-    act(() => input.focus());
-
     const listbox = container.querySelector('[role="listbox"]');
     const option = container.querySelector('[role="option"]');
-    expect(input.getAttribute("aria-expanded")).toBe("true");
-    expect(input.getAttribute("aria-controls")).toBe(listbox?.id);
-    expect(input.getAttribute("aria-activedescendant")).toBe(option?.id);
+    expect(editor.getAttribute("aria-expanded")).toBe("true");
+    expect(editor.getAttribute("aria-controls")).toBe(listbox?.id);
+    expect(editor.getAttribute("aria-activedescendant")).toBe(option?.id);
     expect(option?.getAttribute("aria-selected")).toBe("true");
   });
 
+  /* ---------------------------------------------------------------- */
+  /* The invariant the whole design rests on                          */
+  /* ---------------------------------------------------------------- */
+
+  it("renders exactly the query text, chips and all", () => {
+    const { editor } = renderControlled({
+      value: '(kind:fruit OR kind:veg) AND -name:"granny smith"',
+    });
+
+    expect(readText(editor)).toBe(
+      '(kind:fruit OR kind:veg) AND -name:"granny smith"',
+    );
+  });
+
+  it("keeps the rendered text and the query in step while typing", () => {
+    const { editor } = renderControlled();
+
+    type(editor, "kind:fruit -colors:green");
+
+    expect(readText(editor)).toBe("kind:fruit -colors:green");
+  });
+
+  it("puts the remove control inside the chip, out of the text", () => {
+    const { editor } = renderControlled({ value: "kind:fruit" });
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[data-slot="remove"]',
+    )!;
+
+    expect(editor.contains(remove)).toBe(true);
+    expect(remove.getAttribute("contenteditable")).toBe("false");
+    // The anchor wrapping it is the boundary offset mapping stops at.
+    expect(remove.closest("[data-fs-nontext]")).not.toBeNull();
+    expect(readText(editor)).toBe("kind:fruit");
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Editing                                                          */
+  /* ---------------------------------------------------------------- */
+
+  it("inserts text at the caret", () => {
+    const { editor, changes } = renderControlled({ value: "kind:fruit" });
+
+    type(editor, "s", { anchor: 4, focus: 4 });
+
+    expect(changes).toEqual(["kinds:fruit"]);
+  });
+
+  it("replaces the selected range", () => {
+    const { editor, changes } = renderControlled({ value: "kind:fruit" });
+
+    type(editor, "veg", { anchor: 5, focus: 10 });
+
+    expect(changes.at(-1)).toBe("kind:veg");
+  });
+
+  it("deletes one grapheme cluster at a time", () => {
+    const { editor, changes } = renderControlled({ value: "name:a👍🏽" });
+
+    edit(editor, "deleteContentBackward", undefined, {
+      anchor: "name:a👍🏽".length,
+      focus: "name:a👍🏽".length,
+    });
+
+    expect(changes).toEqual(["name:a"]);
+  });
+
+  it("deletes a whole word backwards", () => {
+    const { editor, changes } = renderControlled({ value: "kind:fruit apple" });
+
+    edit(editor, "deleteWordBackward", undefined, { anchor: 16, focus: 16 });
+
+    expect(changes).toEqual(["kind:fruit "]);
+  });
+
+  it("deletes forwards from the caret", () => {
+    const { editor, changes } = renderControlled({ value: "kind:fruit" });
+
+    edit(editor, "deleteContentForward", undefined, { anchor: 4, focus: 4 });
+
+    expect(changes).toEqual(["kindfruit"]);
+  });
+
+  it("collapses a pasted multi-line value onto one line", () => {
+    const { editor, changes } = renderControlled();
+
+    act(() => {
+      const event = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "clipboardData", {
+        value: { getData: () => "kind:fruit\ncolors:green" },
+      });
+      editor.dispatchEvent(event);
+    });
+
+    expect(changes).toEqual(["kind:fruit colors:green"]);
+  });
+
+  it("refuses line breaks and rich content", () => {
+    const { editor, changes } = renderControlled({ value: "kind:fruit" });
+
+    edit(editor, "insertParagraph");
+    edit(editor, "insertLineBreak");
+    edit(editor, "formatBold");
+
+    expect(changes).toEqual([]);
+    expect(readText(editor)).toBe("kind:fruit");
+  });
+
+  it("makes no edits when read-only", () => {
+    const { editor, changes } = renderControlled({
+      value: "kind:fruit",
+      readOnly: true,
+    });
+
+    expect(editor.hasAttribute("contenteditable")).toBe(false);
+    type(editor, "s", { anchor: 4, focus: 4 });
+    expect(changes).toEqual([]);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* History                                                          */
+  /* ---------------------------------------------------------------- */
+
+  it("undoes and redoes a run of typing as one step", () => {
+    const { editor, changes } = renderControlled({ value: "kind:" });
+
+    type(editor, "fruit", { anchor: 5, focus: 5 });
+    expect(changes.at(-1)).toBe("kind:fruit");
+
+    press(editor, "z", { metaKey: true });
+    expect(changes.at(-1)).toBe("kind:");
+
+    press(editor, "z", { metaKey: true, shiftKey: true });
+    expect(changes.at(-1)).toBe("kind:fruit");
+  });
+
+  it("breaks undo steps at word boundaries", () => {
+    const { editor, changes } = renderControlled();
+
+    type(editor, "kind:fruit apple");
+    press(editor, "z", { metaKey: true });
+
+    expect(changes.at(-1)).toBe("kind:fruit ");
+  });
+
+  it("undoes through the native history input type too", () => {
+    const { editor, changes } = renderControlled({ value: "kind:" });
+
+    type(editor, "fruit", { anchor: 5, focus: 5 });
+    edit(editor, "historyUndo");
+
+    expect(changes.at(-1)).toBe("kind:");
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Suggestions                                                      */
+  /* ---------------------------------------------------------------- */
+
   it("does not hijack Tab unless requested", () => {
-    const { input, changes } = renderControlled({
+    const { editor, changes } = renderControlled({
       fields: [{ field: "kind" }],
     });
-    act(() => input.focus());
 
-    const allowed = input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-
-    expect(allowed).toBe(true);
+    expect(press(editor, "Tab")).toBe(true);
     expect(changes).toEqual([]);
   });
 
   it("accepts the active suggestion with Enter", () => {
     const onSearch = vi.fn();
-    const { input, changes } = renderControlled({
+    const { editor, changes } = renderControlled({
       fields: [{ field: "kind" }],
       onSearch,
     });
-    act(() => input.focus());
 
-    act(() => {
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
+    press(editor, "Enter");
 
     expect(changes).toEqual(["kind:"]);
     expect(onSearch).not.toHaveBeenCalled();
@@ -215,22 +384,14 @@ describe("SearchInput", () => {
 
   it("adds a space and searches when a value suggestion completes a chip", () => {
     const onSearch = vi.fn();
-    const { input, changes } = renderControlled({
+    const { editor, changes } = renderControlled({
       value: "kind:f",
       fields: [{ field: "kind", values: ["fruit"] }],
       onSearch,
     });
-    act(() => input.focus());
+    caretAt(editor, 6);
 
-    act(() => {
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
+    press(editor, "Enter");
 
     expect(changes).toEqual(["kind:fruit "]);
     expect(onSearch).toHaveBeenCalledWith(
@@ -239,20 +400,35 @@ describe("SearchInput", () => {
     );
   });
 
+  it("dismisses on Escape and reopens when typing resumes", () => {
+    const { editor } = renderControlled({ fields: [{ field: "kind" }] });
+    expect(editor.getAttribute("aria-expanded")).toBe("true");
+
+    press(editor, "Escape");
+    expect(editor.getAttribute("aria-expanded")).toBe("false");
+
+    type(editor, "k");
+    expect(editor.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Commit boundaries                                                */
+  /* ---------------------------------------------------------------- */
+
   it("keeps ordinary value changes as drafts", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ value: "kind:f", onSearch });
+    const { editor } = renderControlled({ value: "kind:f", onSearch });
 
-    changeValue(input, "kind:fr");
+    type(editor, "r", { anchor: 6, focus: 6 });
 
     expect(onSearch).not.toHaveBeenCalled();
   });
 
   it("searches when whitespace completes a valid chip", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ value: "kind:fruit", onSearch });
+    const { editor } = renderControlled({ value: "kind:fruit", onSearch });
 
-    changeValue(input, "kind:fruit ");
+    type(editor, " ", { anchor: 10, focus: 10 });
 
     expect(onSearch).toHaveBeenCalledWith(
       "kind:fruit ",
@@ -262,28 +438,19 @@ describe("SearchInput", () => {
 
   it("does not treat whitespace inside a quoted value as chip completion", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ value: 'name:"granny"', onSearch });
-    const next = 'name:"granny "';
+    const { editor } = renderControlled({ value: 'name:"granny"', onSearch });
 
-    changeValue(input, next, next.length - 1);
+    type(editor, " ", { anchor: 12, focus: 12 });
 
     expect(onSearch).not.toHaveBeenCalled();
   });
 
   it("searches when stepping over an auto-inserted closer completes a chip", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ value: 'name:"fruit"', onSearch });
-    input.setSelectionRange('name:"fruit'.length, 'name:"fruit'.length);
+    const { editor } = renderControlled({ value: 'name:"fruit"', onSearch });
+    caretAt(editor, 11);
 
-    act(() => {
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: '"',
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
+    press(editor, '"');
 
     expect(onSearch).toHaveBeenCalledWith(
       'name:"fruit"',
@@ -291,15 +458,24 @@ describe("SearchInput", () => {
     );
   });
 
+  it("auto-pairs an opening delimiter and leaves the caret inside", () => {
+    const { editor, changes, contexts } = renderControlled({ value: "name:" });
+    caretAt(editor, 5);
+
+    press(editor, '"');
+
+    expect(changes).toEqual(['name:""']);
+    expect(contexts.at(-1)?.caret).toBe(6);
+  });
+
   it("normalizes lowercase boolean operators after a separator completes them", () => {
     const onSearch = vi.fn();
-    const { input, changes, contexts } = renderControlled({
+    const { editor, changes, contexts } = renderControlled({
       value: "kind:fruit an",
       onSearch,
     });
 
-    changeValue(input, "kind:fruit and");
-    changeValue(input, "kind:fruit and ");
+    type(editor, "d ", { anchor: 13, focus: 13 });
 
     expect(changes).toEqual(["kind:fruit and", "kind:fruit AND "]);
     expect(contexts.at(-1)?.valid).toBe(false);
@@ -307,59 +483,26 @@ describe("SearchInput", () => {
   });
 
   it("does not normalize an operator prefix while a field is being typed", () => {
-    const { input, changes } = renderControlled();
+    const { editor, changes } = renderControlled();
 
-    changeValue(input, "or");
-    changeValue(input, "ori");
-    changeValue(input, "origin:");
+    type(editor, "origin:");
 
-    expect(changes).toEqual(["or", "ori", "origin:"]);
-  });
-
-  it("dismisses on Escape and reopens when typing resumes", () => {
-    const { input } = renderControlled({
-      fields: [{ field: "kind" }],
-    });
-    act(() => input.focus());
-    expect(input.getAttribute("aria-expanded")).toBe("true");
-
-    act(() => {
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    });
-    expect(input.getAttribute("aria-expanded")).toBe("false");
-
-    act(() => {
-      const setter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(input, "k");
-      input.setSelectionRange(1, 1);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    expect(input.getAttribute("aria-expanded")).toBe("true");
+    expect(changes).toEqual([
+      "o",
+      "or",
+      "ori",
+      "orig",
+      "origi",
+      "origin",
+      "origin:",
+    ]);
   });
 
   it("does not submit while an IME composition is active", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ onSearch });
+    const { editor } = renderControlled({ onSearch });
 
-    act(() => {
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-          isComposing: true,
-        }),
-      );
-    });
+    press(editor, "Enter", { isComposing: true });
 
     expect(onSearch).not.toHaveBeenCalled();
   });
@@ -367,23 +510,14 @@ describe("SearchInput", () => {
   it("does not search an incomplete field value", () => {
     const onSearch = vi.fn();
     const onContextChange = vi.fn();
-    const { input } = renderControlled({
+    const { editor } = renderControlled({
       value: "kind:",
       onSearch,
       onContextChange,
     });
 
-    act(() => {
-      input.focus();
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      input.blur();
-    });
+    press(editor, "Enter");
+    act(() => editor.blur());
 
     expect(onContextChange).toHaveBeenCalledWith(
       expect.objectContaining({ valid: false, ast: null }),
@@ -393,19 +527,10 @@ describe("SearchInput", () => {
 
   it("searches a valid query on Enter and blur", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({ value: "kind:fruit", onSearch });
+    const { editor } = renderControlled({ value: "kind:fruit", onSearch });
 
-    act(() => {
-      input.focus();
-      input.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Enter",
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      input.blur();
-    });
+    press(editor, "Enter");
+    act(() => editor.blur());
 
     expect(onSearch).toHaveBeenCalledTimes(2);
     expect(onSearch).toHaveBeenLastCalledWith(
@@ -414,53 +539,44 @@ describe("SearchInput", () => {
     );
   });
 
-  it("does not treat focus moving to a remove control as leaving the component", () => {
-    const onSearch = vi.fn();
-    const { input } = renderControlled({ value: "kind:fruit", onSearch });
-    hoverFirstChip(input);
-    const remove = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Remove kind:fruit"]',
-    );
+  /* ---------------------------------------------------------------- */
+  /* Chips                                                            */
+  /* ---------------------------------------------------------------- */
 
-    act(() => {
-      input.focus();
-      remove?.focus();
-    });
+  it("renders a removal control for every chip, in document order", () => {
+    renderControlled({ value: "kind:fruit colors:green" });
 
-    expect(onSearch).not.toHaveBeenCalled();
-  });
-
-  it("associates parse errors with the input", () => {
-    const { input } = renderControlled({ value: "kind:" });
-    const error = container.querySelector('[role="alert"]');
-
-    expect(error).not.toBeNull();
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(input.getAttribute("aria-describedby")).toBe(error?.id);
-  });
-
-  it("renders one accessible removal control for the active chip", () => {
-    const { input } = renderControlled({
-      value: "kind:fruit colors:green",
-    });
-    expect(container.querySelector('[data-slot="remove"]')).toBeNull();
-
-    hoverFirstChip(input);
     const buttons = container.querySelectorAll<HTMLButtonElement>(
       'button[data-slot="remove"]',
     );
 
-    expect(buttons).toHaveLength(1);
-    expect(buttons[0]?.getAttribute("aria-label")).toBe("Remove kind:fruit");
+    expect(
+      [...buttons].map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Remove kind:fruit", "Remove colors:green"]);
+  });
+
+  it("renders no removal controls when editing is off", () => {
+    renderControlled({ value: "kind:fruit", disabled: true });
+
+    expect(container.querySelector('[data-slot="remove"]')).toBeNull();
+  });
+
+  it("marks the chip under the pointer", () => {
+    renderControlled({ value: "kind:fruit" });
+    const chip = container.querySelector<HTMLElement>('[data-slot="chip"]')!;
+
+    act(() => {
+      chip.dispatchEvent(
+        new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }),
+      );
+    });
+
+    expect(chip.getAttribute("data-hovered")).toBe("true");
   });
 
   it("searches the remaining valid query after chip removal", () => {
     const onSearch = vi.fn();
-    const { input } = renderControlled({
-      value: "kind:fruit colors:green",
-      onSearch,
-    });
-    hoverFirstChip(input);
+    renderControlled({ value: "kind:fruit colors:green", onSearch });
     const remove = container.querySelector<HTMLButtonElement>(
       'button[aria-label="Remove kind:fruit"]',
     );
@@ -473,22 +589,83 @@ describe("SearchInput", () => {
     );
   });
 
+  it("returns focus to the editor when Escape leaves a remove control", () => {
+    const { editor } = renderControlled({ value: "kind:fruit" });
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[data-slot="remove"]',
+    )!;
+
+    act(() => remove.focus());
+    expect(document.activeElement).toBe(remove);
+
+    act(() => {
+      remove.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+
+    expect(document.activeElement).toBe(editor);
+  });
+
+  it("does not treat focus moving to a remove control as leaving the component", () => {
+    const onSearch = vi.fn();
+    renderControlled({ value: "kind:fruit", onSearch });
+    const remove = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove kind:fruit"]',
+    );
+
+    act(() => remove?.focus());
+
+    expect(onSearch).not.toHaveBeenCalled();
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Errors and context                                               */
+  /* ---------------------------------------------------------------- */
+
+  it("associates parse errors with the editable element", () => {
+    const { editor } = renderControlled({ value: "kind:" });
+    act(() => editor.blur());
+    const error = container.querySelector('[role="alert"]');
+
+    expect(error).not.toBeNull();
+    expect(editor.getAttribute("aria-invalid")).toBe("true");
+    expect(editor.getAttribute("aria-describedby")).toBe(error?.id);
+  });
+
   it("reports caret-only context changes", () => {
     const onContextChange = vi.fn();
-    const { input } = renderControlled({
+    const { editor } = renderControlled({
       value: "kind:fruit",
       onContextChange,
     });
     onContextChange.mockClear();
 
-    act(() => {
-      input.focus();
-      input.setSelectionRange(2, 2);
-      input.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
+    caretAt(editor, 2);
 
     expect(onContextChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ caret: 2 }),
+    );
+  });
+
+  it("reports the full selection, not only the caret", () => {
+    const onContextChange = vi.fn();
+    const { editor } = renderControlled({
+      value: "kind:fruit",
+      onContextChange,
+    });
+
+    caretAt(editor, 5, 10);
+
+    expect(onContextChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        caret: 10,
+        selection: { anchor: 5, focus: 10 },
+      }),
     );
   });
 });
