@@ -49,6 +49,8 @@ body {
   gap: 12px;
   position: sticky;
   top: 24px;
+  /* Drops the first panel level with the table rather than its heading. */
+  margin-block-start: var(--pg-results-head-height, 22px);
 }
 
 .pg-head h1 {
@@ -61,6 +63,7 @@ body {
   margin: 0;
   color: #57534e;
   font-size: 14px;
+  line-height: 1.6;
 }
 
 code,
@@ -369,6 +372,7 @@ kbd {
 
   .pg-side {
     position: static;
+    margin-block-start: 0;
   }
 }
 

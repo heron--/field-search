@@ -44,6 +44,11 @@ const EXAMPLES: { label: string; query: string; note: string }[] = [
     note: "juxtaposition, no operator",
   },
   {
+    label: "Explicit OR",
+    query: "kind:fruit OR kind:nut",
+    note: "a top-level boolean, not a value list",
+  },
+  {
     label: "Negation",
     query: "kind:fruit -colors:green",
     note: "- excludes a filter",
