@@ -103,6 +103,7 @@ const CLOSES = `[...document.querySelectorAll(".fs-close")].map((node) => {
       (button.top + button.bottom) / 2 - (chip.top + chip.bottom) / 2
     ).toFixed(1),
     flushEnd: +(chip.right - button.right).toFixed(1),
+    opacity: getComputedStyle(node).opacity,
     centre: {
       x: button.left + button.width / 2,
       y: button.top + button.height / 2,
@@ -175,6 +176,7 @@ interface CloseBox {
   fillsHeight: boolean;
   offCenter: number;
   flushEnd: number;
+  opacity: string;
   centre: { x: number; y: number };
 }
 
@@ -395,6 +397,13 @@ const steps: Step[] = [
         "remove controls are not flush with the chip's trailing edge",
       );
 
+      // Hidden until the chip is hovered. The reveal is easy to break without
+      // noticing, because every other check here passes either way.
+      check(
+        closes.every((close) => close.opacity === "0"),
+        `remove controls are visible at rest: ${closes.map((c) => c.opacity).join(", ")}`,
+      );
+
       // Hover must not move a single glyph.
       const first = chips[0]!;
       await context.page.mouse.move(
@@ -405,6 +414,17 @@ const steps: Step[] = [
         )) + 20,
       );
       await context.shoot("02-hover-close", FIELD);
+
+      const revealed = await context.closes();
+      check(
+        revealed[0]?.opacity === "1",
+        `hovering a chip did not reveal its remove control: ${revealed[0]?.opacity}`,
+      );
+      check(
+        revealed.slice(1).every((close) => close.opacity === "0"),
+        "hovering one chip revealed the others' remove controls",
+      );
+
       const hovered = await context.chips();
       for (const [index, chip] of hovered.entries()) {
         check(
@@ -679,6 +699,11 @@ const steps: Step[] = [
         check(
           closes.every((close) => close.width >= 24),
           "remove controls are below the 24px touch target",
+        );
+        // No hover to reveal them with, so they have to be visible already.
+        check(
+          closes.every((close) => close.opacity === "1"),
+          "remove controls are hidden on a device that cannot hover",
         );
 
         await context.shoot("04-mobile", ".pg-search");

@@ -516,7 +516,7 @@ a transparent input over a highlight layer:
   --fs-chip-radius: 4px;
   --fs-close-width: 16px; /* width of the remove control */
   --fs-close-gap: 2px; /* space reserved between text and control */
-  --fs-close-idle-opacity: 0.45; /* set to 0 for hover-only remove controls */
+  --fs-close-idle-opacity: 0; /* raise to keep remove controls always visible */
 }
 ```
 
@@ -548,8 +548,11 @@ layer. It is now a single `contenteditable` element.
 | `input`-only props (`inputMode`, …)    | still accepted; `div` attributes now too                       |
 
 Only one chip carried a remove control at a time, revealed by hover. Every chip
-now has its own, always present, so keyboard traversal and touch removal need no
-emulation. Set `--fs-close-idle-opacity: 0` to keep the hover-only appearance.
+now has its own, so keyboard traversal and touch removal need no emulation. They
+still appear on hover, and the room for them is reserved at rest, so revealing
+one never reflows the text under the pointer. Where there is no hover to give —
+a coarse pointer — they stay visible, and `--fs-close-idle-opacity` overrides
+that either way.
 
 ## Contributing
 

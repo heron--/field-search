@@ -107,7 +107,8 @@
     opacity: var(--fs-close-idle-opacity, 0.45);
   }
 
-  :where(.fs-chip:hover, .fs-chip[data-hovered="true"]) > :where(.fs-close),
+  /* Descendant, not child: the control sits inside `.fs-close-anchor`. */
+  :where(.fs-chip:hover, .fs-chip[data-hovered="true"]) :where(.fs-close),
   :where(.fs-close:hover, .fs-close:focus-visible) {
     opacity: 1;
   }
