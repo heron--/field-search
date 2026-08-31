@@ -20,4 +20,17 @@ describe("React style packaging", () => {
     expect(theme).toContain(":where(");
     expect(theme).not.toContain(".fs-theme");
   });
+
+  it("resolves responsive, overridable editor font sizes", async () => {
+    const [base, theme] = await Promise.all([
+      readFile("src/react/base.css", "utf8"),
+      readFile("src/react/theme.css", "utf8"),
+    ]);
+
+    expect(theme).toContain("--fs-size-desktop: 14px");
+    expect(theme).toContain("--fs-size-mobile: 16px");
+    expect(base).toContain("--fs-size: var(--fs-size-desktop, 14px)");
+    expect(base).toContain("@media (max-width: 767px)");
+    expect(base).toContain("--fs-size: var(--fs-size-mobile, 16px)");
+  });
 });
