@@ -24,8 +24,8 @@ async function shoot(page: Page, name: string, selector = ".pg") {
   console.log(`wrote ${OUT}/${name}.png`);
 }
 
-async function setQuery(page: Page, text: string) {
-  await page.$eval(INPUT, (el) => {
+async function setQuery(page: Page, text: string, selector = INPUT) {
+  await page.$eval(selector, (el) => {
     const input = el as HTMLInputElement;
     input.focus();
     input.setSelectionRange(0, input.value.length);
@@ -81,6 +81,31 @@ await page.mouse.move(chip.right + 12, chip.y);
 await new Promise((r) => setTimeout(r, 200));
 const stillThere = await page.$(".fs-close");
 console.log("close survives pointer move onto it:", Boolean(stillThere));
+const activeChipAlignment = await page.evaluate(() => {
+  const placeholder = [...document.querySelectorAll(".fs-layer .fs-chip")]
+    .find((chip) => getComputedStyle(chip).visibility === "hidden")
+    ?.getBoundingClientRect();
+  const active = document
+    .querySelector(".fs-active-chip")
+    ?.getBoundingClientRect();
+  const close = document.querySelector(".fs-close")?.getBoundingClientRect();
+  return placeholder && active && close
+    ? {
+        left: Math.abs(placeholder.left - active.left),
+        top: Math.abs(placeholder.top - active.top),
+        height: Math.abs(placeholder.height - active.height),
+        width: Math.abs(placeholder.width + close.width - active.width),
+      }
+    : null;
+});
+if (
+  !activeChipAlignment ||
+  Object.values(activeChipAlignment).some((difference) => difference > 0.5)
+) {
+  throw new Error(
+    `active chip does not align with its placeholder: ${JSON.stringify(activeChipAlignment)}`,
+  );
+}
 await shoot(page, "03-pointer-on-close", FIELD);
 await page.click('.fs-close[aria-label="Remove kind:fruit"]');
 await new Promise((r) => setTimeout(r, 200));
@@ -203,5 +228,126 @@ await setQuery(page, "kind:fruit");
 await page.$eval(INPUT, (el) => (el as HTMLInputElement).blur());
 await new Promise((r) => setTimeout(r, 200));
 await shoot(page, "10-custom-classes", FIELD);
+
+// The main input mixes immediate field suggestions with asynchronously loaded
+// origin values and uses an accepted value to filter the result table.
+await setQuery(page, "ori");
+const typedFieldPrefix = await page.$eval(
+  INPUT,
+  (input) => (input as HTMLInputElement).value,
+);
+if (typedFieldPrefix !== "ori") {
+  throw new Error(`field prefix was normalized too early: ${typedFieldPrefix}`);
+}
+const fieldSuggestions = await page.$$eval(
+  `[data-slot="suggestion-label"]`,
+  (nodes) => nodes.map((node) => node.textContent?.trim()),
+);
+if (!fieldSuggestions.includes("origin:")) {
+  throw new Error(`origin field suggestion was not shown: ${fieldSuggestions}`);
+}
+
+await setQuery(page, "origin:austr");
+const loadingMessage = await page.$eval(`[role="status"]`, (node) =>
+  node.textContent?.trim(),
+);
+if (loadingMessage !== "Loading countries from mock API…") {
+  throw new Error(`async loading state was not shown: ${loadingMessage}`);
+}
+await shoot(page, "11-async-loading");
+await new Promise((r) => setTimeout(r, 550));
+const valueSuggestions = await page.$$eval(
+  `[data-slot="suggestion-label"]`,
+  (nodes) => nodes.map((node) => node.textContent?.trim()),
+);
+if (!valueSuggestions.includes("australia")) {
+  throw new Error(
+    `async value suggestions did not resolve: ${valueSuggestions}`,
+  );
+}
+await shoot(page, "12-async-values");
+await page.keyboard.press("Enter");
+const acceptedAsyncValue = await page.$eval(
+  INPUT,
+  (input) => (input as HTMLInputElement).value,
+);
+if (acceptedAsyncValue !== "origin:australia ") {
+  throw new Error(`async suggestion was not accepted: ${acceptedAsyncValue}`);
+}
+await new Promise((r) => setTimeout(r, 100));
+const filteredRows = await page.$$eval(".pg-table tbody tr", (rows) =>
+  rows.map((row) => row.querySelector("td")?.textContent?.trim()),
+);
+if (
+  !filteredRows.includes("granny smith") ||
+  !filteredRows.includes("butternut squash") ||
+  filteredRows.length !== 2
+) {
+  throw new Error(`async origin did not filter results: ${filteredRows}`);
+}
+
+// Mobile layout should stay within the viewport. A touch reveals one enlarged
+// close target instead of rendering every chip close control at once.
+await page.setViewport({
+  width: 390,
+  height: 844,
+  deviceScaleFactor: 2,
+  isMobile: true,
+  hasTouch: true,
+});
+await page.reload({ waitUntil: "networkidle2" });
+await page.addStyleTag({ content: "*{transition:none !important}" });
+await new Promise((r) => setTimeout(r, 500));
+await setQuery(page, "kind:fruit colors:green");
+const pageOverflows = await page.evaluate(
+  () => document.documentElement.scrollWidth > window.innerWidth,
+);
+if (pageOverflows) throw new Error("playground overflows the mobile viewport");
+
+const mobileChip = await centerOf(page, 0);
+await page.touchscreen.tap(mobileChip.x, mobileChip.y);
+await new Promise((r) => setTimeout(r, 150));
+const mobileClose = await page.$eval(
+  '.fs-close[aria-label="Remove kind:fruit"]',
+  (node) => {
+    const element = node as HTMLElement;
+    const rect = element.getBoundingClientRect();
+    return {
+      visible: rect.width > 0 && getComputedStyle(element).display !== "none",
+      opacity: getComputedStyle(element).opacity,
+      width: rect.width,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  },
+);
+const visibleCloseCount = await page.$$eval(
+  ".fs-close",
+  (nodes) =>
+    nodes.filter((node) => getComputedStyle(node).opacity === "1").length,
+);
+if (
+  !mobileClose.visible ||
+  mobileClose.opacity !== "1" ||
+  mobileClose.width < 24 ||
+  visibleCloseCount !== 1
+) {
+  throw new Error(
+    `mobile close geometry is invalid: ${JSON.stringify({ mobileClose, visibleCloseCount })}`,
+  );
+}
+await shoot(page, "13-mobile-close", ".pg-search");
+await page.touchscreen.tap(mobileClose.x, mobileClose.y);
+await new Promise((r) => setTimeout(r, 150));
+const afterMobileRemoval = await page.$eval(
+  INPUT,
+  (input) => (input as HTMLInputElement).value,
+);
+if (afterMobileRemoval !== "colors:green") {
+  throw new Error(
+    `mobile close did not remove the chip: ${afterMobileRemoval}`,
+  );
+}
+await shoot(page, "14-mobile-playground");
 
 await browser.close();

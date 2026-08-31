@@ -133,6 +133,102 @@ kbd {
   color: #15803d;
 }
 
+/* ---------- search and async source ---------- */
+
+.pg-search {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.pg-search-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.pg-search-label label {
+  font-weight: 700;
+}
+
+.pg-search-label span {
+  color: #6d28d9;
+}
+
+.pg-async-source {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #ddd6fe;
+  border-radius: 12px;
+  background: #f5f3ff;
+}
+
+.pg-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pg-section-head h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.pg-section-head p {
+  margin: 0;
+  color: #57534e;
+  font-size: 12px;
+}
+
+.pg-api-badge {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid #c4b5fd;
+  border-radius: 999px;
+  background: #fff;
+  color: #6d28d9;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pg-source-scroll {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.pg-source-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.pg-source-table th,
+.pg-source-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f5f3ff;
+  text-align: left;
+}
+
+.pg-source-table th {
+  position: sticky;
+  top: 0;
+  background: #ede9fe;
+  color: #6d28d9;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 /* ---------- results ---------- */
 
 .pg-results-head {
@@ -146,12 +242,22 @@ kbd {
 
 .pg-table {
   width: 100%;
+  min-width: 900px;
   border-collapse: collapse;
   font-size: 13px;
   background: #fff;
   border: 1px solid #e7e5e4;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.pg-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e7e5e4;
+  border-radius: 10px;
+  background: #fff;
+  overscroll-behavior-inline: contain;
 }
 
 .pg-table th,
@@ -184,6 +290,7 @@ kbd {
 
 .pg-skins {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -221,7 +328,6 @@ kbd {
   --fs-number: #fbbf24;
   --fs-chip-radius: 9px;
   --fs-close-width: 18px;
-  --fs-gap: 0.8em;
 }
 
 /* Consumer classes win over the library's low-specificity theme layer. */
@@ -235,4 +341,38 @@ kbd {
   background: #fde68a;
   box-shadow: 0 0 0 3px #fde68a;
   border-radius: 2px;
+}
+
+@media (max-width: 640px) {
+  .pg {
+    gap: 18px;
+    padding: 24px 12px 48px;
+  }
+
+  .pg-head h1 {
+    font-size: 21px;
+  }
+
+  .pg-examples,
+  .pg-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pg-search-label,
+  .pg-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .pg-async-source {
+    padding: 12px;
+  }
+
+  .pg-table-scroll {
+    margin-inline: -12px;
+    width: calc(100% + 24px);
+    border-inline: 0;
+    border-radius: 0;
+  }
 }

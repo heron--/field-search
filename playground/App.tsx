@@ -1,8 +1,10 @@
 import * as React from "react";
 import {
+  defaultSuggestions,
   SearchInput,
-  type SearchContext,
   type FieldSuggestion,
+  type SearchContext,
+  type SuggestionItem,
 } from "../src/react";
 import { parse } from "../src/parser";
 import { stringify } from "../src/stringify";
@@ -25,7 +27,7 @@ const FIELDS: FieldSuggestion[] = [
   { field: "name", detail: "text", values: distinct((r) => r.name) },
   { field: "kind", detail: "text", values: distinct((r) => r.kind) },
   { field: "colors", detail: "list", values: distinct((r) => r.colors) },
-  { field: "origin", detail: "text", values: distinct((r) => r.origin) },
+  { field: "origin", detail: "country · async" },
   { field: "tags", detail: "list", values: distinct((r) => r.tags) },
   { field: "calories", detail: "number" },
   { field: "grams", detail: "number" },
@@ -115,12 +117,79 @@ const SKINS: { id: Skin; label: string; note: string }[] = [
   },
 ];
 
+const ASYNC_DELAY = 450;
+
+const ASYNC_ORIGINS = PRODUCE.map((row) => ({
+  produce: row.name,
+  country: row.origin,
+}));
+
+const ASYNC_COUNTRIES = [
+  ...new Set(ASYNC_ORIGINS.map((row) => row.country)),
+].sort();
+
+function loadOriginSuggestions(
+  context: SearchContext,
+  signal: AbortSignal,
+): Promise<SuggestionItem[]> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      resolve(
+        defaultSuggestions(
+          [{ field: "origin", detail: "country", values: ASYNC_COUNTRIES }],
+          context.target,
+        ),
+      );
+    }, ASYNC_DELAY);
+
+    signal.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timeout);
+        reject(new DOMException("Suggestion request aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
+
 export default function App() {
   const initialQuery = "kind:fruit -colors:green";
   const [query, setQuery] = React.useState(initialQuery);
   const [context, setContext] = React.useState<SearchContext | null>(null);
   const [searched, setSearched] = React.useState(initialQuery);
   const [skin, setSkin] = React.useState<Skin>("default");
+  const [suggestions, setSuggestions] = React.useState<SuggestionItem[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!context) return;
+
+    const target = context.target;
+    const asyncOrigin = target.kind === "value" && target.field === "origin";
+    if (!asyncOrigin) {
+      setSuggestionsLoading(false);
+      setSuggestions(defaultSuggestions(FIELDS, target));
+      return;
+    }
+
+    const request = new AbortController();
+    setSuggestionsLoading(true);
+
+    loadOriginSuggestions(context, request.signal)
+      .then(setSuggestions)
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.error(error);
+        }
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setSuggestionsLoading(false);
+      });
+
+    return () => request.abort();
+  }, [context?.target.kind, context?.target.field, context?.target.fragment]);
+
   const results = React.useMemo(() => {
     if (searched.trim() === "") return PRODUCE;
     try {
@@ -168,13 +237,28 @@ export default function App() {
         </span>
       </div>
 
-      <div className={skin === "midnight" ? "pg-midnight" : undefined}>
+      <div className={`pg-search${skin === "midnight" ? " pg-midnight" : ""}`}>
+        <div className="pg-search-label">
+          <label htmlFor="produce-search">Search produce</label>
+          <span>
+            <code>origin</code> values come from the async country source below
+          </span>
+        </div>
         <SearchInput
+          id="produce-search"
           value={query}
           onValueChange={setQuery}
           onContextChange={setContext}
           onSearch={(next) => setSearched(next)}
-          fields={FIELDS}
+          suggestions={suggestions}
+          suggestionsLoading={suggestionsLoading}
+          loadingMessage="Loading countries from mock API…"
+          emptyMessage="No matches"
+          suggestionsHeader={(current) =>
+            current.target.kind === "value" && current.target.field === "origin"
+              ? "Countries from the async source"
+              : "Filter by"
+          }
           placeholder="kind:fruit -colors:green"
           classNames={
             skin === "custom"
@@ -232,6 +316,39 @@ export default function App() {
         </div>
       </section>
 
+      <section className="pg-async-source">
+        <div className="pg-section-head">
+          <div>
+            <h2>Async country source</h2>
+            <p>
+              The main input loads these country values for <code>origin</code>{" "}
+              after a simulated {ASYNC_DELAY} ms request. Try{" "}
+              <code>origin:aus</code>, accept Australia, and commit the query to
+              filter the results.
+            </p>
+          </div>
+          <span className="pg-api-badge">{ASYNC_ORIGINS.length} rows</span>
+        </div>
+        <div className="pg-source-scroll">
+          <table className="pg-source-table">
+            <thead>
+              <tr>
+                <th>produce</th>
+                <th>country</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ASYNC_ORIGINS.map((row) => (
+                <tr key={row.produce}>
+                  <td>{row.produce}</td>
+                  <td>{row.country}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section>
         <h2 className="pg-results-head">
           {results === null
@@ -241,36 +358,38 @@ export default function App() {
               }`}
         </h2>
         {results !== null && (
-          <table className="pg-table">
-            <thead>
-              <tr>
-                <th>name</th>
-                <th>kind</th>
-                <th>colors</th>
-                <th>origin</th>
-                <th className="pg-num">calories</th>
-                <th className="pg-num">price</th>
-                <th className="pg-num">seeds</th>
-                <th>harvested</th>
-                <th>tags</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((row) => (
-                <tr key={row.name}>
-                  <td>{row.name}</td>
-                  <td>{row.kind}</td>
-                  <td>{row.colors.join(", ")}</td>
-                  <td>{row.origin}</td>
-                  <td className="pg-num">{row.calories}</td>
-                  <td className="pg-num">{row.price.toFixed(2)}</td>
-                  <td className="pg-num">{row.seeds}</td>
-                  <td>{row.harvested}</td>
-                  <td>{row.tags.join(", ")}</td>
+          <div className="pg-table-scroll">
+            <table className="pg-table">
+              <thead>
+                <tr>
+                  <th>name</th>
+                  <th>kind</th>
+                  <th>colors</th>
+                  <th>origin</th>
+                  <th className="pg-num">calories</th>
+                  <th className="pg-num">price</th>
+                  <th className="pg-num">seeds</th>
+                  <th>harvested</th>
+                  <th>tags</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {results.map((row) => (
+                  <tr key={row.name}>
+                    <td>{row.name}</td>
+                    <td>{row.kind}</td>
+                    <td>{row.colors.join(", ")}</td>
+                    <td>{row.origin}</td>
+                    <td className="pg-num">{row.calories}</td>
+                    <td className="pg-num">{row.price.toFixed(2)}</td>
+                    <td className="pg-num">{row.seeds}</td>
+                    <td>{row.harvested}</td>
+                    <td>{row.tags.join(", ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </main>
