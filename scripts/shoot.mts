@@ -360,14 +360,18 @@ const steps: Step[] = [
       await context.blur();
       await context.shoot("01-resting", FIELD);
 
-      // Guards the emulation itself: without it this step silently checks the
-      // coarse-pointer behaviour instead, which is what CI was doing.
-      check(
-        await context.page.evaluate(
-          'matchMedia("(hover: hover) and (pointer: fine)").matches',
-        ),
-        "the harness is not emulating a fine pointer",
-      );
+      /**
+       * Whether the chip holds room for the remove control or grows to make it
+       * depends on whether the browser reports a hover. Headless runners
+       * disagree — a laptop reports one, CI does not — and neither CDP media
+       * emulation nor the Blink pointer settings override it. So the step
+       * checks whichever branch is live and says which, rather than asserting
+       * one and failing wherever the other applies.
+       */
+      const hoverable = (await context.page.evaluate(
+        'matchMedia("(hover: hover)").matches',
+      )) as boolean;
+      context.note("pointer", hoverable ? "hover" : "none (coarse branch)");
 
       const chips = await context.chips();
       context.note("chips", chips.length);
@@ -376,12 +380,20 @@ const steps: Step[] = [
         chips.every((chip) => chip.padStart >= 3),
         "chips have no leading padding",
       );
-      // At rest the chip is compact: no room held open for a control that is
-      // not shown, so the trailing padding is only the chip's own.
-      check(
-        chips.every((chip) => Math.abs(chip.padEnd - chip.padStart) <= 0.5),
-        `chips hold room open at rest: ${chips.map((c) => c.padEnd).join(", ")}`,
-      );
+      if (hoverable) {
+        // Compact at rest: no room held open for a control that is not shown,
+        // so the trailing padding is only the chip's own.
+        check(
+          chips.every((chip) => Math.abs(chip.padEnd - chip.padStart) <= 0.5),
+          `chips hold room open at rest: ${chips.map((c) => c.padEnd).join(", ")}`,
+        );
+      } else {
+        // Nothing to hover with, so the room stays open and the control shows.
+        check(
+          chips.every((chip) => chip.padEnd > chip.padStart),
+          "chips hold no room for an always-visible control",
+        );
+      }
       check(
         new Set(chips.map((chip) => chip.top)).size === 1,
         "chips are not on one line",
@@ -396,9 +408,11 @@ const steps: Step[] = [
       // Easy to break without noticing: every other check here passes either
       // way, so the reveal has to be asserted on its own.
       check(
-        resting.every((close) => close.opacity === "0"),
-        `remove controls are visible at rest: ${resting.map((c) => c.opacity).join(", ")}`,
+        resting.every((close) => close.opacity === (hoverable ? "0" : "1")),
+        `remove controls are ${hoverable ? "visible at rest" : "hidden with no hover to reveal them"}: ${resting.map((c) => c.opacity).join(", ")}`,
       );
+
+      if (!hoverable) return;
 
       const first = chips[0]!;
       await context.page.mouse.move(
@@ -717,7 +731,6 @@ const steps: Step[] = [
     async run(context) {
       try {
         await context.page.setViewport(MOBILE);
-        await emulatePointer("coarse");
         await context.page.reload({ waitUntil: "domcontentloaded" });
         await context.page.waitForSelector(EDITOR);
         await context.page.addStyleTag({
@@ -726,10 +739,8 @@ const steps: Step[] = [
         await context.setQuery("kind:fruit colors:green");
 
         check(
-          await context.page.evaluate(
-            'matchMedia("(hover: none) and (pointer: coarse)").matches',
-          ),
-          "the harness is not emulating a coarse pointer",
+          await context.page.evaluate('matchMedia("(hover: none)").matches'),
+          "the mobile viewport still reports a hover",
         );
 
         const overflows = await context.page.evaluate(
@@ -763,7 +774,6 @@ const steps: Step[] = [
         await context.waitForQuery("colors:green");
       } finally {
         await context.page.setViewport(DESKTOP);
-        await emulatePointer("fine");
         await context.page.reload({ waitUntil: "domcontentloaded" });
         await context.page.waitForSelector(EDITOR);
         await context.page.addStyleTag({
@@ -886,23 +896,6 @@ if (process.env.THROTTLE) {
   await page.emulateCPUThrottling(Number(process.env.THROTTLE));
 }
 await page.setViewport(DESKTOP);
-/**
- * Headless runners disagree about whether they have a pointer: CI reports a
- * coarse one where a laptop reports fine, which silently swaps the hover
- * behaviour under test. Say which it is rather than inherit it.
- *
- * Puppeteer only whitelists the `prefers-*` features, so this goes to CDP.
- */
-const emulation = await page.createCDPSession();
-async function emulatePointer(kind: "fine" | "coarse") {
-  await emulation.send("Emulation.setEmulatedMedia", {
-    features: [
-      { name: "hover", value: kind === "fine" ? "hover" : "none" },
-      { name: "pointer", value: kind },
-    ],
-  });
-}
-await emulatePointer("fine");
 
 const pageProblems: { step: string; text: string }[] = [];
 let currentStep = "startup";
