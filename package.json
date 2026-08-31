@@ -33,7 +33,8 @@
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "visual": "node --experimental-strip-types scripts/shoot.mts",
+    "visual": "tsx scripts/shoot.mts --shots",
+    "visual:check": "tsx scripts/shoot.mts",
     "format": "prettier --write ."
   },
   "dependencies": {
@@ -54,6 +55,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vitest": "^4.1.11"

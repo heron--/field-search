@@ -168,6 +168,8 @@ export function useFieldSearch({
   const [activeIndex, setActiveIndex] = React.useState(0);
   const pendingSelectionRef = React.useRef<EditorSelection | null>(null);
   const history = useHistory(value);
+  /** The last value this controller put into history, committed or observed. */
+  const recordedRef = React.useRef(value);
 
   // Clamping here rather than in the setter keeps the setter free of any
   // dependency on the current value, so listeners never need re-subscribing.
@@ -246,6 +248,7 @@ export function useFieldSearch({
       const nextContext = createSearchContext(nextValue, resolved);
       pendingSelectionRef.current = resolved;
       setSelectionState(resolved);
+      recordedRef.current = nextValue;
       if (options?.history !== "skip") {
         history.record(
           { value: nextValue, selection: resolved },
@@ -264,9 +267,19 @@ export function useFieldSearch({
   );
 
   // A value replaced from outside — a reset button, a saved search — is a state
-  // worth returning to, so it joins the stack too. Values this controller
-  // committed are already recorded and land here as a no-op.
+  // worth returning to, so it joins the stack too.
+  //
+  // Only values this controller did not commit itself get here. Recording its
+  // own commits again would be worse than redundant: `commit` records
+  // synchronously while this effect runs a render later, so an effect carrying
+  // a value the commit path has already superseded would push that stale value
+  // as a new state and split the run of coalesced edits it belongs to.
+  //
+  // That lag needs React's real interleaving to appear, so jsdom cannot see it.
+  // The `history` step of the browser harness is what covers this.
   React.useEffect(() => {
+    if (value === recordedRef.current) return;
+    recordedRef.current = value;
     history.record({ value, selection: collapsed(value.length) });
   }, [history, value]);
 
