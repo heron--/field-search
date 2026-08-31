@@ -1,538 +1,791 @@
 /**
- * Visual and behavioural harness. Not part of the test suite — run it by hand:
- *   npx vite playground --port 5190 &
- *   npx tsx scripts/shoot.mts            (or: npx vite-node scripts/shoot.mts)
+ * Browser harness for the things jsdom cannot see: paint, layout, and the
+ * browser's own editing pipeline. Everything already covered by the unit suite
+ * belongs there instead — a check here costs roughly forty times as much.
  *
- * Writes annotated PNGs to /tmp/fs-shots and asserts the things jsdom cannot
- * see: real chip geometry, caret placement, and the browser's own editing
- * pipeline driving the model.
+ *   npm run visual:check                 assertions only
+ *   npm run visual                       assertions plus screenshots
+ *   npm run visual -- --only=caret       one step, for iterating
+ *   npm run visual -- --list             what the steps are
+ *
+ * Steps are independent and each resets the playground first, so any subset can
+ * run alone. A failing step is recorded and the run continues, so one pass
+ * reports everything that is wrong rather than only the first thing.
+ *
+ * The playground is started automatically unless something already serves the
+ * URL. Screenshots land in /tmp/fs-shots.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import puppeteer, { type Page } from "puppeteer";
 
-const URL = process.env.URL ?? "http://localhost:5190/";
 const OUT = "/tmp/fs-shots";
-
-const FIELD = ".fs-field";
 const EDITOR = ".fs-editor";
-
-async function shoot(page: Page, name: string, selector = ".pg") {
-  const el = await page.$(selector);
-  if (!el) throw new Error(`no element for ${selector}`);
-  const buffer = await el.screenshot();
-  await writeFile(`${OUT}/${name}.png`, buffer);
-  console.log(`wrote ${OUT}/${name}.png`);
-}
-
-/** The query as the DOM holds it. Remove controls carry no text of their own. */
-async function query(page: Page) {
-  return page.$eval(EDITOR, (node) => node.textContent ?? "");
-}
-
-async function setQuery(page: Page, text: string) {
-  await page.$eval(EDITOR, (node) => {
-    (node as HTMLElement).focus();
-    const selection = node.ownerDocument.getSelection();
-    selection?.selectAllChildren(node);
-  });
-  await page.keyboard.press("Backspace");
-  if (text) await page.keyboard.type(text);
-  await new Promise((r) => setTimeout(r, 250));
-}
-
-async function committedQuery(page: Page) {
-  return page.$eval(
-    ".pg-committed code",
-    (node) => node.textContent?.trim() ?? "",
-  );
-}
-
-/** Put the caret at a model offset, the way the component itself would. */
-async function caretAt(page: Page, offset: number) {
-  await page.evaluate((target) => {
-    const editor = document.querySelector(".fs-editor") as HTMLElement;
-    editor.focus();
-    const walker = document.createTreeWalker(
-      editor,
-      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
-          return (node as Element).hasAttribute("data-fs-nontext")
-            ? NodeFilter.FILTER_REJECT
-            : NodeFilter.FILTER_SKIP;
-        },
-      },
-    );
-    let base = 0;
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-      const text = node as Text;
-      if (target <= base + text.data.length) {
-        document
-          .getSelection()
-          ?.setBaseAndExtent(text, target - base, text, target - base);
-        return;
-      }
-      base += text.data.length;
-    }
-  }, offset);
-  await new Promise((r) => setTimeout(r, 80));
-}
-
-async function chipBoxes(page: Page) {
-  return page.$$eval(".fs-chip", (chips) =>
-    chips.map((chip) => {
-      const box = chip.getBoundingClientRect();
-      // Measure the text alone: a range over the whole chip would union in the
-      // out-of-flow remove control and hide the space reserved for it.
-      const range = document.createRange();
-      range.selectNodeContents(chip);
-      const control = chip.querySelector("[data-fs-nontext]");
-      if (control) range.setEndBefore(control);
-      const text = range.getBoundingClientRect();
-      return {
-        text: chip.textContent ?? "",
-        left: box.left,
-        right: box.right,
-        width: box.width,
-        height: box.height,
-        padStart: text.left - box.left,
-        padEnd: box.right - text.right,
-        reserved: getComputedStyle(chip).paddingInlineEnd,
-      };
-    }),
-  );
-}
-
-async function centerOf(page: Page, index: number) {
-  return page.evaluate((i) => {
-    const chip = [...document.querySelectorAll(".fs-chip")][i] as HTMLElement;
-    const r = chip.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2, right: r.right };
-  }, index);
-}
-
-const browser = await puppeteer.launch({
-  headless: true,
-  args: ["--force-device-scale-factor=2", "--font-render-hinting=none"],
-});
-const page = await browser.newPage();
-
-// The component logs a development-only error if the rendered text ever drifts
-// from the query. Nothing here should trip it.
-const consoleErrors: string[] = [];
-page.on("console", (message) => {
-  const text = message.text();
-  // Resource 404s (a missing favicon, say) are the playground's business.
-  if (
-    message.type() === "error" &&
-    !text.startsWith("Failed to load resource")
-  ) {
-    consoleErrors.push(text);
-    console.log("console error:", text.slice(0, 80));
-  }
-});
-page.on("pageerror", (error) => consoleErrors.push(String(error)));
-
-await page.setViewport({ width: 1180, height: 900, deviceScaleFactor: 2 });
-// Headless Chrome only paints a caret in a frame it considers focused.
-await page.bringToFront();
-await mkdir(OUT, { recursive: true });
-await page.goto(URL, { waitUntil: "networkidle2" });
-// Transitions do not advance in a headless tab; land on the end state.
-await page.addStyleTag({ content: "*{transition:none !important}" });
-await new Promise((r) => setTimeout(r, 400));
-
+const FIELD = ".fs-field";
+const ROOT = ".fs-root";
 const RESTING = "kind:fruit -colors:green calories:[10 TO 90]";
-await setQuery(page, RESTING);
-if ((await query(page)) !== RESTING) {
-  throw new Error(`typing did not produce the query: ${await query(page)}`);
-}
-await page.$eval(EDITOR, (el) => (el as HTMLElement).blur());
-await new Promise((r) => setTimeout(r, 200));
-if ((await committedQuery(page)) !== RESTING) {
-  throw new Error(`blur did not commit the valid query`);
-}
-await shoot(page, "01-resting", FIELD);
-
-// The point of the refactor: chips are boxes with room of their own, and no
-// second copy of the string to stay aligned with.
-const boxes = await chipBoxes(page);
-console.log("chip geometry:", boxes);
-if (boxes.length !== 3)
-  throw new Error(`expected 3 chips, got ${boxes.length}`);
-if (boxes.some((box) => box.padStart < 3)) {
-  throw new Error("chips have no leading padding");
-}
-if (boxes.some((box) => box.padEnd < 3)) {
-  throw new Error("chips reserve no room for the remove control");
-}
-for (const [index, box] of boxes.slice(1).entries()) {
-  const gap = box.left - boxes[index]!.right;
-  if (gap < 1) throw new Error(`chips ${index} and ${index + 1} collide`);
-}
-
-const closes = await page.$$eval(".fs-close", (nodes) =>
-  nodes.map((node) => {
-    const button = node.getBoundingClientRect();
-    const chip = node.closest(".fs-chip")!.getBoundingClientRect();
-    return {
-      inside:
-        button.left >= chip.left - 0.5 && button.right <= chip.right + 0.5,
-      width: button.width,
-      height: +button.height.toFixed(1),
-      chipHeight: +chip.height.toFixed(1),
-      fillsHeight: Math.abs(button.height - chip.height) < 0.5,
-      offCenter: +(
-        (button.top + button.bottom) / 2 -
-        (chip.top + chip.bottom) / 2
-      ).toFixed(1),
-      flushEnd: +(chip.right - button.right).toFixed(1),
-      opacity: getComputedStyle(node).opacity,
-    };
-  }),
-);
-console.log("remove controls:", closes);
-if (closes.length !== 3 || closes.some((close) => !close.inside)) {
-  throw new Error("remove controls are not seated inside their chips");
-}
-if (closes.some((close) => Math.abs(close.offCenter) > 0.5)) {
-  throw new Error("remove controls are not vertically centred in their chips");
-}
-if (closes.some((close) => !close.fillsHeight)) {
-  throw new Error("remove controls do not fill their chip's height");
-}
-if (closes.some((close) => Math.abs(close.flushEnd) > 0.5)) {
-  throw new Error(
-    "remove controls are not flush with the chip's trailing edge",
-  );
-}
-
-// The caret must actually paint over a chip's background. Nothing else here can
-// see this: focus, caret-color and the selection range can all be perfectly
-// correct while the caret is painted over by a positioned inline.
-await setQuery(page, "kind:fruit apple");
-await caretAt(page, 7);
-const frames = new Set<string>();
-for (let i = 0; i < 5; i++) {
-  frames.add(Buffer.from(await page.$eval(EDITOR, () => "")).toString());
-  frames.delete("");
-  const shot = await (await page.$(EDITOR))!.screenshot();
-  frames.add(Buffer.from(shot).toString("base64"));
-  await new Promise((r) => setTimeout(r, 350));
-}
-console.log("caret blink frames:", frames.size);
-if (frames.size < 2) {
-  throw new Error("the caret does not paint inside a chip");
-}
-
-await setQuery(page, RESTING);
-await page.$eval(EDITOR, (el) => (el as HTMLElement).blur());
-await new Promise((r) => setTimeout(r, 200));
-
-const chip = await centerOf(page, 0);
-await page.mouse.move(chip.x, chip.y);
-await new Promise((r) => setTimeout(r, 200));
-await shoot(page, "02-hover-close", FIELD);
-
-// Hovering must not move a single glyph: the geometry is static now.
-const hoveredBoxes = await chipBoxes(page);
-for (const [index, box] of hoveredBoxes.entries()) {
-  if (Math.abs(box.left - boxes[index]!.left) > 0.5) {
-    throw new Error(`hover reflowed chip ${index}`);
-  }
-}
-
-await page.mouse.move(chip.right - 4, chip.y);
-await new Promise((r) => setTimeout(r, 200));
-await shoot(page, "03-pointer-on-close", FIELD);
-await page.click('.fs-close[aria-label="Remove kind:fruit"]');
-await new Promise((r) => setTimeout(r, 200));
-const afterRemoval = "-colors:green calories:[10 TO 90]";
-if ((await committedQuery(page)) !== afterRemoval) {
-  throw new Error("chip removal did not commit the remaining query");
-}
-
-/* ---------------------------------------------------------------- */
-/* Caret control                                                    */
-/* ---------------------------------------------------------------- */
-
-await setQuery(page, "kind:fruit apple");
-await caretAt(page, 4);
-await page.keyboard.type("s");
-if ((await query(page)) !== "kinds:fruit apple") {
-  throw new Error(`caret insertion landed wrong: ${await query(page)}`);
-}
-
-// Backspace on the boundary between two chips removes the space between them,
-// leaving the segmentation to re-run rather than deleting a whole chip.
-await caretAt(page, 12);
-await page.keyboard.press("Backspace");
-if ((await query(page)) !== "kinds:fruitapple") {
-  throw new Error(`backspace at a boundary went wrong: ${await query(page)}`);
-}
-
-// The caret survives the re-render that every keystroke causes.
-const caretOffset = await page.evaluate(() => {
-  const editor = document.querySelector(".fs-editor") as HTMLElement;
-  const selection = document.getSelection()!;
-  const range = document.createRange();
-  range.setStart(editor, 0);
-  range.setEnd(selection.focusNode!, selection.focusOffset);
-  return range.toString().length;
-});
-if (caretOffset !== 11) {
-  throw new Error(`caret drifted after re-render: ${caretOffset}`);
-}
-
-await page.keyboard.down("Meta");
-await page.keyboard.press("KeyZ");
-await page.keyboard.up("Meta");
-await new Promise((r) => setTimeout(r, 120));
-if ((await query(page)) !== "kinds:fruit apple") {
-  throw new Error(`undo did not restore the deletion: ${await query(page)}`);
-}
-await page.keyboard.down("Meta");
-await page.keyboard.down("Shift");
-await page.keyboard.press("KeyZ");
-await page.keyboard.up("Shift");
-await page.keyboard.up("Meta");
-await new Promise((r) => setTimeout(r, 120));
-if ((await query(page)) !== "kinds:fruitapple") {
-  throw new Error(`redo did not reapply the deletion: ${await query(page)}`);
-}
-
-// Enter must never break the line. Dismiss the suggestions first, or Enter
-// means "accept the active item" rather than "search".
-await setQuery(page, "kind:fruit");
-await page.keyboard.press("Escape");
-await page.keyboard.press("Enter");
-await new Promise((r) => setTimeout(r, 120));
-if ((await query(page)) !== "kind:fruit") {
-  throw new Error(`Enter altered the query: ${await query(page)}`);
-}
-// One line means every top-level segment box shares a top edge. `white-space:
-// pre` is the only thing holding that; `pre-wrap` is what a wrapping field needs.
-const distinctTops = await page.$eval(EDITOR, (node) => {
-  const tops = [...node.children].map((child) =>
-    Math.round(child.getBoundingClientRect().top),
-  );
-  return new Set(tops).size;
-});
-if (distinctTops > 1) throw new Error("the field wrapped onto a second line");
-
-/* ---------------------------------------------------------------- */
-/* Suggestions                                                      */
-/* ---------------------------------------------------------------- */
-
-await page.mouse.move(5, 5);
-await setQuery(page, "co");
-await new Promise((r) => setTimeout(r, 350));
-if ((await committedQuery(page)) !== "kind:fruit") {
-  throw new Error("draft typing changed the committed query");
-}
-const combobox = await page.$eval(EDITOR, (editor) => {
-  const controls = editor.getAttribute("aria-controls");
-  const active = editor.getAttribute("aria-activedescendant");
-  return {
-    role: editor.getAttribute("role"),
-    expanded: editor.getAttribute("aria-expanded"),
-    editable: editor.getAttribute("contenteditable"),
-    controlsListbox: Boolean(
-      controls &&
-      document.getElementById(controls)?.getAttribute("role") === "listbox",
-    ),
-    activeOption: Boolean(
-      active &&
-      document.getElementById(active)?.getAttribute("role") === "option",
-    ),
-  };
-});
-console.log("combobox wiring:", combobox);
-if (
-  combobox.role !== "combobox" ||
-  combobox.expanded !== "true" ||
-  !combobox.controlsListbox ||
-  !combobox.activeOption
-) {
-  throw new Error("combobox ARIA relationship is incomplete");
-}
-if (combobox.editable !== "plaintext-only") {
-  throw new Error(`expected plaintext-only, got ${combobox.editable}`);
-}
-await shoot(page, "04-suggestions-fields", ".pg");
-
-await setQuery(page, "colors:gr");
-await new Promise((r) => setTimeout(r, 350));
-await shoot(page, "05-suggestions-values", ".pg");
-
-// Mid-typing: the error must stay hidden while focused.
-await setQuery(page, "kind:");
-await shoot(page, "06-typing-no-error", FIELD);
-await page.$eval(EDITOR, (el) => (el as HTMLElement).blur());
-await new Promise((r) => setTimeout(r, 250));
-if ((await committedQuery(page)) !== "kind:fruit") {
-  throw new Error("an invalid blur executed a search");
-}
-await shoot(page, "07-blurred-error", ".fs-root");
-
-await setQuery(page, "kind:fruit");
-await page.keyboard.type(" ");
-await new Promise((r) => setTimeout(r, 200));
-if ((await committedQuery(page)) !== "kind:fruit") {
-  throw new Error("finishing a chip did not commit the query");
-}
-
-// Tab walks the remove controls in document order, no emulation involved.
-await setQuery(page, "kind:fruit colors:green");
-await page.keyboard.press("Tab");
-await new Promise((r) => setTimeout(r, 200));
-const firstRemove = await page.evaluate(() =>
-  document.activeElement?.getAttribute("aria-label"),
-);
-await page.keyboard.press("Tab");
-await new Promise((r) => setTimeout(r, 200));
-const secondRemove = await page.evaluate(() =>
-  document.activeElement?.getAttribute("aria-label"),
-);
-console.log("tab order:", [firstRemove, secondRemove]);
-if (
-  firstRemove !== "Remove kind:fruit" ||
-  secondRemove !== "Remove colors:green"
-) {
-  throw new Error("Tab did not walk the remove controls in order");
-}
-await page.keyboard.press("Tab");
-await shoot(page, "08-keyboard-remove", FIELD);
-
-// Scoped tokens must follow the suggestion list through its portal.
-await page.$$eval(".pg-skin", (buttons) => {
-  const midnight = buttons.find((button) => button.textContent === "Midnight");
-  (midnight as HTMLButtonElement | undefined)?.click();
-});
-await setQuery(page, "co");
-await new Promise((r) => setTimeout(r, 300));
-await shoot(page, "09-midnight-suggestions", ".pg");
-
-await setQuery(page, "kind:fruit and colors:green");
-const normalized = await query(page);
-if (normalized !== "kind:fruit AND colors:green") {
-  throw new Error(`lowercase operator was not normalized: ${normalized}`);
-}
-await page.$eval(EDITOR, (el) => (el as HTMLElement).blur());
-if ((await committedQuery(page)) !== normalized) {
-  throw new Error("the normalized query was not committed on blur");
-}
-
-await page.$$eval(".pg-skin", (buttons) => {
-  const custom = buttons.find((button) => button.textContent === "Custom");
-  (custom as HTMLButtonElement | undefined)?.click();
-});
-await setQuery(page, "kind:fruit");
-await page.$eval(EDITOR, (el) => (el as HTMLElement).blur());
-await new Promise((r) => setTimeout(r, 200));
-await shoot(page, "10-custom-classes", FIELD);
-
-// The main input mixes immediate field suggestions with asynchronously loaded
-// origin values and uses an accepted value to filter the result table.
-await setQuery(page, "ori");
-const typedFieldPrefix = await query(page);
-if (typedFieldPrefix !== "ori") {
-  throw new Error(`field prefix was normalized too early: ${typedFieldPrefix}`);
-}
-const fieldSuggestions = await page.$$eval(
-  `[data-slot="suggestion-label"]`,
-  (nodes) => nodes.map((node) => node.textContent?.trim()),
-);
-if (!fieldSuggestions.includes("origin:")) {
-  throw new Error(`origin field suggestion was not shown: ${fieldSuggestions}`);
-}
-
-await setQuery(page, "origin:austr");
-const loadingMessage = await page.$eval(`[role="status"]`, (node) =>
-  node.textContent?.trim(),
-);
-if (loadingMessage !== "Loading countries from mock API…") {
-  throw new Error(`async loading state was not shown: ${loadingMessage}`);
-}
-await shoot(page, "11-async-loading");
-await new Promise((r) => setTimeout(r, 550));
-const valueSuggestions = await page.$$eval(
-  `[data-slot="suggestion-label"]`,
-  (nodes) => nodes.map((node) => node.textContent?.trim()),
-);
-if (!valueSuggestions.includes("australia")) {
-  throw new Error(
-    `async value suggestions did not resolve: ${valueSuggestions}`,
-  );
-}
-await shoot(page, "12-async-values");
-await page.keyboard.press("Enter");
-const acceptedAsyncValue = await query(page);
-if (acceptedAsyncValue !== "origin:australia ") {
-  throw new Error(`async suggestion was not accepted: ${acceptedAsyncValue}`);
-}
-await new Promise((r) => setTimeout(r, 100));
-const filteredRows = await page.$$eval(".pg-table tbody tr", (rows) =>
-  rows.map((row) => row.querySelector("td")?.textContent?.trim()),
-);
-if (
-  !filteredRows.includes("granny smith") ||
-  !filteredRows.includes("butternut squash") ||
-  filteredRows.length !== 2
-) {
-  throw new Error(`async origin did not filter results: ${filteredRows}`);
-}
-
-// Mobile layout should stay within the viewport. Every chip now carries its own
-// enlarged close target, so removal is a single tap with nothing to reveal.
-await page.setViewport({
+/** Undo is Cmd on macOS, Ctrl elsewhere — CI runs on Linux. */
+const MOD = process.platform === "darwin" ? "Meta" : "Control";
+const DESKTOP = { width: 1180, height: 900, deviceScaleFactor: 2 };
+const MOBILE = {
   width: 390,
   height: 844,
   deviceScaleFactor: 2,
   isMobile: true,
   hasTouch: true,
-});
-await page.reload({ waitUntil: "networkidle2" });
-await page.addStyleTag({ content: "*{transition:none !important}" });
-await new Promise((r) => setTimeout(r, 500));
-await setQuery(page, "kind:fruit colors:green");
-const pageOverflows = await page.evaluate(
-  () => document.documentElement.scrollWidth > window.innerWidth,
-);
-if (pageOverflows) throw new Error("playground overflows the mobile viewport");
+};
 
-const mobileCloses = await page.$$eval(".fs-close", (nodes) =>
-  nodes.map((node) => {
-    const rect = node.getBoundingClientRect();
-    return {
-      width: rect.width,
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-      label: node.getAttribute("aria-label"),
-    };
-  }),
-);
-console.log("mobile close targets:", mobileCloses);
-if (mobileCloses.length !== 2 || mobileCloses.some((c) => c.width < 24)) {
-  throw new Error(
-    `mobile close geometry is invalid: ${JSON.stringify(mobileCloses)}`,
+/* ------------------------------------------------------------------ */
+/* Arguments                                                          */
+/* ------------------------------------------------------------------ */
+
+const argv = process.argv.slice(2);
+const hasFlag = (name: string) => argv.includes(`--${name}`);
+const option = (name: string) =>
+  argv
+    .find((argument) => argument.startsWith(`--${name}=`))
+    ?.slice(name.length + 3);
+
+const wantShots = hasFlag("shots");
+const only = option("only")
+  ?.split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+const port = Number(option("port") ?? 5190);
+const url = option("url") ?? process.env.URL ?? `http://localhost:${port}/`;
+
+/* ------------------------------------------------------------------ */
+/* Page-side expressions                                              */
+/*                                                                    */
+/* Written as strings on purpose: the TypeScript loader rewrites named */
+/* helpers inside `evaluate` callbacks into references the page cannot */
+/* resolve.                                                           */
+/* ------------------------------------------------------------------ */
+
+const TEXT_WALKER = `document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+  acceptNode(node) {
+    if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+    return node.hasAttribute("data-fs-nontext")
+      ? NodeFilter.FILTER_REJECT
+      : NodeFilter.FILTER_SKIP;
+  },
+})`;
+
+/** Chip boxes, with the text extent measured apart from the remove control. */
+const CHIPS = `[...document.querySelectorAll(".fs-chip")].map((chip) => {
+  const box = chip.getBoundingClientRect();
+  const range = document.createRange();
+  range.selectNodeContents(chip);
+  const control = chip.querySelector("[data-fs-nontext]");
+  if (control) range.setEndBefore(control);
+  const text = range.getBoundingClientRect();
+  return {
+    text: chip.textContent,
+    left: +box.left.toFixed(2),
+    right: +box.right.toFixed(2),
+    top: Math.round(box.top),
+    padStart: +(text.left - box.left).toFixed(2),
+    padEnd: +(box.right - text.right).toFixed(2),
+  };
+})`;
+
+const CLOSES = `[...document.querySelectorAll(".fs-close")].map((node) => {
+  const button = node.getBoundingClientRect();
+  const chip = node.closest(".fs-chip").getBoundingClientRect();
+  return {
+    label: node.getAttribute("aria-label"),
+    inside: button.left >= chip.left - 0.5 && button.right <= chip.right + 0.5,
+    width: +button.width.toFixed(1),
+    fillsHeight: Math.abs(button.height - chip.height) < 0.5,
+    offCenter: +(
+      (button.top + button.bottom) / 2 - (chip.top + chip.bottom) / 2
+    ).toFixed(1),
+    flushEnd: +(chip.right - button.right).toFixed(1),
+    centre: {
+      x: button.left + button.width / 2,
+      y: button.top + button.height / 2,
+    },
+  };
+})`;
+
+/** Model offset of the caret, counted the way selection.ts counts it. */
+const CARET_OFFSET = `(() => {
+  const root = document.querySelector("${EDITOR}");
+  const selection = document.getSelection();
+  if (!root || !selection || !selection.focusNode) return -1;
+  const walker = ${TEXT_WALKER};
+  let base = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node === selection.focusNode) return base + selection.focusOffset;
+    base += node.data.length;
+  }
+  return -1;
+})()`;
+
+const putCaret = (offset: number) => `(() => {
+  const root = document.querySelector("${EDITOR}");
+  root.focus();
+  const walker = ${TEXT_WALKER};
+  let base = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (${offset} <= base + node.data.length) {
+      const local = ${offset} - base;
+      document.getSelection().setBaseAndExtent(node, local, node, local);
+      return true;
+    }
+    base += node.data.length;
+  }
+  return false;
+})()`;
+
+/** Distinct top edges of the top-level segment boxes; 1 means a single line. */
+const LINE_COUNT = `(() => {
+  const root = document.querySelector("${EDITOR}");
+  const tops = [...root.children].map((child) =>
+    Math.round(child.getBoundingClientRect().top),
   );
+  return new Set(tops).size;
+})()`;
+
+/* ------------------------------------------------------------------ */
+/* Harness plumbing                                                   */
+/* ------------------------------------------------------------------ */
+
+class CheckFailed extends Error {}
+
+function check(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new CheckFailed(message);
 }
-await shoot(page, "13-mobile-close", ".pg-search");
-const target = mobileCloses.find((c) => c.label === "Remove kind:fruit")!;
-await page.touchscreen.tap(target.x, target.y);
-await new Promise((r) => setTimeout(r, 200));
-if ((await query(page)) !== "colors:green") {
-  throw new Error(`mobile close did not remove the chip: ${await query(page)}`);
+
+interface ChipBox {
+  text: string;
+  left: number;
+  right: number;
+  top: number;
+  padStart: number;
+  padEnd: number;
 }
-await shoot(page, "14-mobile-playground");
+
+interface CloseBox {
+  label: string;
+  inside: boolean;
+  width: number;
+  fillsHeight: boolean;
+  offCenter: number;
+  flushEnd: number;
+  centre: { x: number; y: number };
+}
+
+interface Context {
+  page: Page;
+  shots: boolean;
+  note: (label: string, detail: unknown) => void;
+  shoot: (name: string, selector?: string) => Promise<void>;
+  /** Replace the query in one operation. Faster, and normalizes as it lands. */
+  setQuery: (text: string) => Promise<void>;
+  /** Replace the query with real keystrokes, for testing the input pipeline. */
+  typeQuery: (text: string) => Promise<void>;
+  query: () => Promise<string>;
+  committed: () => Promise<string>;
+  waitForQuery: (text: string) => Promise<void>;
+  waitForCommitted: (text: string) => Promise<void>;
+  caretTo: (offset: number) => Promise<void>;
+  caretOffset: () => Promise<number>;
+  chips: () => Promise<ChipBox[]>;
+  closes: () => Promise<CloseBox[]>;
+  lineCount: () => Promise<number>;
+  blur: () => Promise<void>;
+  caretPaints: () => Promise<boolean>;
+}
+
+interface Step {
+  name: string;
+  /** Produces screenshots only; skipped when running assertions alone. */
+  shotsOnly?: boolean;
+  run: (context: Context) => Promise<void>;
+}
+
+async function reachable(target: string) {
+  try {
+    const response = await fetch(target, { signal: AbortSignal.timeout(1500) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startPlayground(): Promise<() => void> {
+  if (await reachable(url)) {
+    console.log(`using the playground already serving ${url}`);
+    return () => {};
+  }
+  const child = spawn(
+    "npx",
+    ["vite", "playground", "--port", String(port), "--strictPort"],
+    { stdio: "ignore" },
+  );
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (await reachable(url)) {
+      console.log(`started the playground on ${url}`);
+      return () => child.kill("SIGTERM");
+    }
+    if (child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  child.kill("SIGTERM");
+  throw new Error(`the playground never came up on ${url}`);
+}
+
+function buildContext(page: Page, shots: boolean): Context {
+  const expression = <T,>(source: string) =>
+    page.evaluate(source) as Promise<T>;
+
+  const waitFor = (source: string, description: string) =>
+    page
+      .waitForFunction(source, { timeout: 5000, polling: 50 })
+      .then(() => undefined)
+      .catch(() => {
+        throw new CheckFailed(`timed out waiting for ${description}`);
+      });
+
+  const query = () => page.$eval(EDITOR, (node) => node.textContent ?? "");
+  const committed = () =>
+    page.$eval(".pg-committed code", (node) => node.textContent?.trim() ?? "");
+
+  const waitForQuery = (text: string) =>
+    waitFor(
+      `(() => (document.querySelector("${EDITOR}")?.textContent ?? "") === ${JSON.stringify(text)})()`,
+      `the query to be ${JSON.stringify(text)}`,
+    );
+
+  const waitForCommitted = (text: string) =>
+    waitFor(
+      `(() => (document.querySelector(".pg-committed code")?.textContent ?? "").trim() === ${JSON.stringify(text)})()`,
+      `the committed query to be ${JSON.stringify(text)}`,
+    );
+
+  const selectAll = () =>
+    page.$eval(EDITOR, (node) => {
+      (node as HTMLElement).focus();
+      node.ownerDocument.getSelection()?.selectAllChildren(node);
+    });
+
+  return {
+    page,
+    shots,
+    note: (label, detail) => console.log(`        ${label}:`, detail),
+    async shoot(name, selector = ".pg") {
+      if (!shots) return;
+      const element = await page.$(selector);
+      check(element, `no element for ${selector}`);
+      await writeFile(`${OUT}/${name}.png`, await element.screenshot());
+    },
+    async setQuery(text) {
+      await selectAll();
+      if (text === "") await page.keyboard.press("Backspace");
+      // One insertion rather than one per character: hundreds of round trips
+      // become one, and the component sees a single `insertText`. Despite the
+      // name, this maps to CDP `Input.insertText` and takes a whole string.
+      else await page.keyboard.sendCharacter(text);
+      await waitForQuery(text);
+    },
+    async typeQuery(text) {
+      await selectAll();
+      await page.keyboard.press("Backspace");
+      if (text) await page.keyboard.type(text);
+    },
+    query,
+    committed,
+    waitForQuery,
+    waitForCommitted,
+    async caretTo(offset) {
+      const placed = await expression<boolean>(putCaret(offset));
+      check(placed, `could not place the caret at ${offset}`);
+    },
+    caretOffset: () => expression<number>(CARET_OFFSET),
+    chips: () => expression<ChipBox[]>(CHIPS),
+    closes: () => expression<CloseBox[]>(CLOSES),
+    lineCount: () => expression<number>(LINE_COUNT),
+    blur: () => page.$eval(EDITOR, (node) => (node as HTMLElement).blur()),
+    /**
+     * Whether the caret is painted at all, by sampling for the blink. Focus,
+     * `caret-color` and the selection range can all be correct while a
+     * positioned inline paints over the caret, and nothing else here sees that.
+     */
+    async caretPaints() {
+      const element = await page.$(EDITOR);
+      check(element, "no editor to sample");
+      const frames = new Set<string>();
+      for (let sample = 0; sample < 8; sample++) {
+        frames.add(Buffer.from(await element.screenshot()).toString("base64"));
+        if (frames.size > 1) return true;
+        await new Promise((resolve) => setTimeout(resolve, 280));
+      }
+      return false;
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Steps                                                              */
+/* ------------------------------------------------------------------ */
+
+const steps: Step[] = [
+  {
+    name: "editable",
+    async run({ page }) {
+      const state = await page.$eval(EDITOR, (node) => ({
+        editable: node.getAttribute("contenteditable"),
+        multiline: node.getAttribute("aria-multiline"),
+      }));
+      check(
+        state.editable === "plaintext-only",
+        `expected plaintext-only, got ${state.editable}`,
+      );
+      check(state.multiline === "false", "the field is not marked single-line");
+    },
+  },
+
+  {
+    name: "layout",
+    async run(context) {
+      await context.setQuery(RESTING);
+      await context.blur();
+      await context.shoot("01-resting", FIELD);
+
+      const chips = await context.chips();
+      context.note("chips", chips.length);
+      check(chips.length === 3, `expected 3 chips, got ${chips.length}`);
+      check(
+        chips.every((chip) => chip.padStart >= 3),
+        "chips have no leading padding",
+      );
+      check(
+        chips.every((chip) => chip.padEnd >= 3),
+        "chips reserve no room for the remove control",
+      );
+      check(
+        new Set(chips.map((chip) => chip.top)).size === 1,
+        "chips are not on one line",
+      );
+      for (const [index, chip] of chips.slice(1).entries()) {
+        const gap = chip.left - chips[index]!.right;
+        check(gap >= 1, `chips ${index} and ${index + 1} collide`);
+      }
+
+      const closes = await context.closes();
+      check(closes.length === 3, `expected 3 remove controls`);
+      check(
+        closes.every((close) => close.inside),
+        "remove controls are not seated inside their chips",
+      );
+      check(
+        closes.every((close) => close.fillsHeight),
+        "remove controls do not fill their chip's height",
+      );
+      check(
+        closes.every((close) => Math.abs(close.offCenter) <= 0.5),
+        "remove controls are not vertically centred",
+      );
+      check(
+        closes.every((close) => Math.abs(close.flushEnd) <= 0.5),
+        "remove controls are not flush with the chip's trailing edge",
+      );
+
+      // Hover must not move a single glyph.
+      const first = chips[0]!;
+      await context.page.mouse.move(
+        (first.left + first.right) / 2,
+        (await context.page.$eval(
+          EDITOR,
+          (n) => n.getBoundingClientRect().top,
+        )) + 20,
+      );
+      await context.shoot("02-hover-close", FIELD);
+      const hovered = await context.chips();
+      for (const [index, chip] of hovered.entries()) {
+        check(
+          Math.abs(chip.left - chips[index]!.left) <= 0.5,
+          `hover reflowed chip ${index}`,
+        );
+      }
+    },
+  },
+
+  {
+    name: "caret",
+    async run(context) {
+      await context.setQuery("kind:fruit apple");
+      // Offset 7 sits inside the first chip, over its background.
+      await context.caretTo(7);
+      check(await context.caretPaints(), "the caret does not paint in a chip");
+    },
+  },
+
+  {
+    name: "caret-control",
+    async run(context) {
+      await context.setQuery("kind:fruit apple");
+
+      await context.caretTo(4);
+      await context.page.keyboard.type("s");
+      await context.waitForQuery("kinds:fruit apple");
+
+      // The boundary between two chips: this removes the space between them
+      // rather than a whole chip.
+      await context.caretTo(12);
+      await context.page.keyboard.press("Backspace");
+      await context.waitForQuery("kinds:fruitapple");
+
+      const offset = await context.caretOffset();
+      check(
+        offset === 11,
+        `the caret drifted across the re-render: ${offset} rather than 11`,
+      );
+    },
+  },
+
+  {
+    name: "deletion",
+    async run(context) {
+      // Chrome hands `beforeinput` an explicit target range, so this exercises
+      // a different path from the unit suite, which only has the fallback.
+      await context.setQuery("name:a👍🏽");
+      await context.caretTo("name:a👍🏽".length);
+      await context.page.keyboard.press("Backspace");
+      await context.waitForQuery("name:a");
+    },
+  },
+
+  {
+    name: "history",
+    async run(context) {
+      await context.setQuery("kind:");
+      await context.caretTo(5);
+      // Real keystrokes, so a run of typing coalesces into one undo step.
+      await context.page.keyboard.type("fruit");
+      await context.waitForQuery("kind:fruit");
+
+      await context.page.keyboard.down(MOD);
+      await context.page.keyboard.press("KeyZ");
+      await context.page.keyboard.up(MOD);
+      await context.waitForQuery("kind:");
+
+      await context.page.keyboard.down(MOD);
+      await context.page.keyboard.down("Shift");
+      await context.page.keyboard.press("KeyZ");
+      await context.page.keyboard.up("Shift");
+      await context.page.keyboard.up(MOD);
+      await context.waitForQuery("kind:fruit");
+    },
+  },
+
+  {
+    name: "auto-pairing",
+    async run(context) {
+      // Delimiters pair on keydown, which only real keystrokes reach: typing
+      // `[` inserts `[]`, and typing the closer steps over it.
+      await context.typeQuery("calories:[10 TO 90]");
+      await context.waitForQuery("calories:[10 TO 90]");
+      await context.typeQuery('name:"granny smith"');
+      await context.waitForQuery('name:"granny smith"');
+    },
+  },
+
+  {
+    name: "operator-normalization",
+    async run(context) {
+      await context.typeQuery("kind:fruit and colors:green");
+      await context.waitForQuery("kind:fruit AND colors:green");
+    },
+  },
+
+  {
+    name: "chip-complete",
+    async run(context) {
+      // A separator completing a valid chip commits the query.
+      await context.setQuery("kind:fruit");
+      await context.caretTo(10);
+      await context.page.keyboard.type(" ");
+      await context.waitForCommitted("kind:fruit");
+    },
+  },
+
+  {
+    name: "single-line",
+    async run(context) {
+      await context.setQuery("kind:fruit");
+      // Dismiss the suggestions, or Enter means "accept the active item".
+      await context.page.keyboard.press("Escape");
+      await context.page.keyboard.press("Enter");
+      await context.waitForQuery("kind:fruit");
+
+      const lines = await context.lineCount();
+      check(lines === 1, `the field wrapped onto ${lines} lines`);
+    },
+  },
+
+  {
+    name: "keyboard-nav",
+    async run(context) {
+      await context.setQuery("kind:fruit colors:green");
+      await context.page.keyboard.press("Escape");
+
+      await context.page.keyboard.press("Tab");
+      const first = await context.page.evaluate(
+        "document.activeElement?.getAttribute('aria-label')",
+      );
+      await context.page.keyboard.press("Tab");
+      const second = await context.page.evaluate(
+        "document.activeElement?.getAttribute('aria-label')",
+      );
+      context.note("tab order", [first, second]);
+      check(
+        first === "Remove kind:fruit" && second === "Remove colors:green",
+        `Tab did not walk the remove controls: ${first}, ${second}`,
+      );
+
+      // Escape hands focus back to the field.
+      await context.page.keyboard.press("Escape");
+      const returned = await context.page.evaluate(
+        "document.activeElement?.classList.contains('fs-editor')",
+      );
+      check(returned, "Escape did not return focus to the field");
+
+      await context.shoot("03-keyboard-remove", FIELD);
+    },
+  },
+
+  {
+    name: "remove",
+    async run(context) {
+      await context.setQuery(RESTING);
+      await context.blur();
+      await context.page.click('.fs-close[aria-label="Remove kind:fruit"]');
+      await context.waitForCommitted("-colors:green calories:[10 TO 90]");
+    },
+  },
+
+  {
+    name: "mobile",
+    async run(context) {
+      try {
+        await context.page.setViewport(MOBILE);
+        await context.page.reload({ waitUntil: "domcontentloaded" });
+        await context.page.waitForSelector(EDITOR);
+        await context.page.addStyleTag({
+          content: "*{transition:none !important}",
+        });
+        await context.setQuery("kind:fruit colors:green");
+
+        const overflows = await context.page.evaluate(
+          "document.documentElement.scrollWidth > window.innerWidth",
+        );
+        check(!overflows, "the playground overflows the mobile viewport");
+
+        const closes = await context.closes();
+        context.note(
+          "touch targets",
+          closes.map((close) => close.width),
+        );
+        check(closes.length === 2, "expected one remove control per chip");
+        check(
+          closes.every((close) => close.width >= 24),
+          "remove controls are below the 24px touch target",
+        );
+
+        await context.shoot("04-mobile", ".pg-search");
+
+        const target = closes.find(
+          (close) => close.label === "Remove kind:fruit",
+        );
+        check(target, "no remove control for the first chip");
+        await context.page.touchscreen.tap(target.centre.x, target.centre.y);
+        await context.waitForQuery("colors:green");
+      } finally {
+        await context.page.setViewport(DESKTOP);
+        await context.page.reload({ waitUntil: "domcontentloaded" });
+        await context.page.waitForSelector(EDITOR);
+        await context.page.addStyleTag({
+          content: "*{transition:none !important}",
+        });
+      }
+    },
+  },
+
+  {
+    name: "screenshots",
+    shotsOnly: true,
+    async run(context) {
+      const { page } = context;
+
+      await context.setQuery("co");
+      await page.waitForSelector('[role="option"]');
+      await context.shoot("05-suggestions-fields");
+
+      await context.setQuery("colors:gr");
+      await page.waitForSelector('[role="option"]');
+      await context.shoot("06-suggestions-values");
+
+      // Errors stay hidden while the field has focus, and appear after blur.
+      await context.setQuery("kind:");
+      await context.shoot("07-typing-no-error", FIELD);
+      await context.blur();
+      await page.waitForSelector('[role="alert"]');
+      await context.shoot("08-blurred-error", ROOT);
+
+      // Asynchronous origin values, loading and resolved.
+      await context.setQuery("origin:austr");
+      await page.waitForSelector('[role="status"]');
+      await context.shoot("09-async-loading");
+      await page.waitForFunction(
+        `(() => [...document.querySelectorAll('[data-slot="suggestion-label"]')]
+           .some((node) => node.textContent?.trim() === "australia"))()`,
+        { timeout: 5000, polling: 50 },
+      );
+      await context.shoot("10-async-values");
+
+      // Scoped theme tokens must follow the popover through its portal.
+      for (const [skin, name] of [
+        ["Midnight", "11-midnight"],
+        ["Custom", "12-custom-classes"],
+      ] as const) {
+        await page.$$eval(
+          ".pg-skin",
+          (buttons, label) => {
+            const match = buttons.find(
+              (button) => button.textContent === label,
+            );
+            (match as HTMLButtonElement | undefined)?.click();
+          },
+          skin,
+        );
+        await context.setQuery("co");
+        await page.waitForSelector('[role="option"]');
+        await context.shoot(name);
+      }
+
+      await page.$$eval(".pg-skin", (buttons) => {
+        const first = buttons.find(
+          (button) => button.textContent === "Default",
+        );
+        (first as HTMLButtonElement | undefined)?.click();
+      });
+    },
+  },
+];
+
+/* ------------------------------------------------------------------ */
+/* Runner                                                             */
+/* ------------------------------------------------------------------ */
+
+if (hasFlag("list")) {
+  for (const step of steps) {
+    console.log(`${step.name}${step.shotsOnly ? "  (screenshots only)" : ""}`);
+  }
+  process.exit(0);
+}
+
+const selected = steps.filter((step) => {
+  if (only) return only.includes(step.name);
+  return wantShots || !step.shotsOnly;
+});
+
+if (only) {
+  const unknown = only.filter(
+    (name) => !steps.some((step) => step.name === name),
+  );
+  if (unknown.length > 0) {
+    console.error(`unknown step(s): ${unknown.join(", ")}`);
+    console.error(`available: ${steps.map((step) => step.name).join(", ")}`);
+    process.exit(2);
+  }
+}
+
+const stopPlayground = await startPlayground();
+// Cleared so a renamed or removed step cannot leave a stale image behind.
+if (wantShots) await rm(OUT, { recursive: true, force: true });
+await mkdir(OUT, { recursive: true });
+
+const browser = await puppeteer.launch({
+  headless: true,
+  args: [
+    "--force-device-scale-factor=2",
+    "--font-render-hinting=none",
+    // GitHub runners cannot use the sandbox.
+    ...(process.env.CI ? ["--no-sandbox", "--disable-setuid-sandbox"] : []),
+  ],
+});
+const page = await browser.newPage();
+// Headless Chrome only paints a caret in a frame it considers focused.
+await page.bringToFront();
+// Slowing the page down makes render-interleaving bugs deterministic. CI is a
+// slower machine than most laptops, so a check that only fails there is often
+// reproducible here with THROTTLE=4.
+if (process.env.THROTTLE) {
+  await page.emulateCPUThrottling(Number(process.env.THROTTLE));
+}
+await page.setViewport(DESKTOP);
+
+const pageProblems: { step: string; text: string }[] = [];
+let currentStep = "startup";
+page.on("console", (message) => {
+  const text = message.text();
+  // Resource 404s are the playground's business, not the component's.
+  if (message.type() !== "error") return;
+  if (text.startsWith("Failed to load resource")) return;
+  pageProblems.push({ step: currentStep, text });
+});
+page.on("pageerror", (error) => {
+  pageProblems.push({ step: currentStep, text: String(error) });
+});
+
+await page.goto(url, { waitUntil: "domcontentloaded" });
+await page.waitForSelector(EDITOR);
+// Transitions do not advance in a headless tab; land on the end state.
+await page.addStyleTag({ content: "*{transition:none !important}" });
+
+const context = buildContext(page, wantShots);
+const failures: string[] = [];
+
+for (const step of selected) {
+  currentStep = step.name;
+  const before = pageProblems.length;
+  const started = Date.now();
+  try {
+    // Every step starts from an empty, blurred, committed-clean field, which is
+    // what makes any subset runnable on its own.
+    await context.setQuery("");
+    await context.blur();
+    await page.mouse.move(2, 2);
+    await context.waitForCommitted("(all records)");
+
+    await step.run(context);
+
+    const raised = pageProblems.slice(before);
+    if (raised.length > 0) {
+      throw new CheckFailed(`page reported: ${raised[0]!.text.slice(0, 120)}`);
+    }
+    console.log(`  ok    ${step.name}  ${Date.now() - started}ms`);
+  } catch (error) {
+    const message =
+      error instanceof CheckFailed ? error.message : String(error);
+    failures.push(`${step.name}: ${message}`);
+    console.log(`  FAIL  ${step.name}  ${Date.now() - started}ms`);
+    console.log(`        ${message}`);
+  }
+}
 
 await browser.close();
+stopPlayground();
 
-if (consoleErrors.length > 0) {
-  throw new Error(
-    `console errors during the run:\n${consoleErrors.join("\n")}`,
-  );
+console.log();
+if (failures.length > 0) {
+  console.log(`${failures.length} of ${selected.length} steps failed:`);
+  for (const failure of failures) console.log(`  - ${failure}`);
+  process.exit(1);
 }
-console.log("no console errors");
+console.log(
+  `${selected.length} steps passed${wantShots ? `; screenshots in ${OUT}` : ""}`,
+);

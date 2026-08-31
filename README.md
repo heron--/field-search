@@ -551,16 +551,39 @@ Only one chip carried a remove control at a time, revealed by hover. Every chip
 now has its own, always present, so keyboard traversal and touch removal need no
 emulation. Set `--fs-close-idle-opacity: 0` to keep the hover-only appearance.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md), and [docs/testing.md](docs/testing.md)
+for how the two test tiers divide up.
+
 ## Development
 
 ```sh
-npm test
+npm test          # unit suite, jsdom
 npm run typecheck
 npm run build
 ```
 
-For visual checks, run `npm run dev -- --port 5190` and then `npm run visual`.
-The harness writes interaction-state screenshots to `/tmp/fs-shots`.
+Some behaviour has no jsdom equivalent — paint, layout, and the browser's own
+editing pipeline. Those live in a Puppeteer harness that starts the playground
+itself:
+
+```sh
+npm run visual:check              # assertions only; this is what CI runs
+npm run visual                    # assertions plus screenshots in /tmp/fs-shots
+npm run visual -- --only=caret    # one step, for iterating
+npm run visual -- --list          # available steps
+```
+
+Steps are independent and each resets the field first, so any subset runs alone.
+A failing step is recorded and the run continues, so one pass reports everything
+that is wrong.
+
+Keep this harness for what only a browser can answer: whether the caret actually
+paints, real chip geometry, `plaintext-only` support, native Tab order, Chrome's
+`beforeinput` target-range deletion path, and touch target sizes. Anything the
+unit suite can assert belongs there instead — a check here costs roughly forty
+times as much.
 
 ## License
 

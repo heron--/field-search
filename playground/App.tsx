@@ -162,16 +162,26 @@ export default function App() {
   const [suggestions, setSuggestions] = React.useState<SuggestionItem[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = React.useState(false);
 
+  /**
+   * Synchronous suggestions settle in the same batch as the context they came
+   * from. Deriving them in an effect instead would add a render to every
+   * keystroke, and those chained renders accumulate against React's nested
+   * update limit while someone is typing quickly.
+   */
+  const handleContextChange = React.useCallback((next: SearchContext) => {
+    setContext(next);
+    const target = next.target;
+    if (target.kind === "value" && target.field === "origin") return;
+    setSuggestionsLoading(false);
+    setSuggestions(defaultSuggestions(FIELDS, target));
+  }, []);
+
+  // Only the asynchronous source needs an effect, so only it pays for one.
   React.useEffect(() => {
     if (!context) return;
 
     const target = context.target;
-    const asyncOrigin = target.kind === "value" && target.field === "origin";
-    if (!asyncOrigin) {
-      setSuggestionsLoading(false);
-      setSuggestions(defaultSuggestions(FIELDS, target));
-      return;
-    }
+    if (!(target.kind === "value" && target.field === "origin")) return;
 
     const request = new AbortController();
     setSuggestionsLoading(true);
@@ -248,7 +258,7 @@ export default function App() {
           id="produce-search"
           value={query}
           onValueChange={setQuery}
-          onContextChange={setContext}
+          onContextChange={handleContextChange}
           onSearch={(next) => setSearched(next)}
           suggestions={suggestions}
           suggestionsLoading={suggestionsLoading}

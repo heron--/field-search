@@ -75,5 +75,7 @@ export function useHistory(initialValue: string): HistoryController {
     return entries.current[position.current] ?? null;
   }, []);
 
-  return { record, undo, redo };
+  // Memoized: a fresh object here would make any effect that depends on the
+  // controller re-run on every render.
+  return React.useMemo(() => ({ record, undo, redo }), [record, undo, redo]);
 }
