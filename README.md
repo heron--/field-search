@@ -17,6 +17,9 @@ Try it in the [live playground](https://heron--.github.io/field-search/).
 npm install field-search react react-dom
 ```
 
+`field-search` is ESM-only and requires Node.js 20.19.x, or Node.js 22.12 or
+later.
+
 React 18.2 and 19 are supported.
 
 ## React quick start
