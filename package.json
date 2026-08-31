@@ -24,6 +24,10 @@
     "react"
   ],
   "type": "module",
+  "types": "./dist/index.d.ts",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "sideEffects": [
     "**/*.css"
   ],
@@ -33,11 +37,13 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./react": {
       "types": "./dist/react/index.d.ts",
-      "import": "./dist/react/index.js"
+      "import": "./dist/react/index.js",
+      "default": "./dist/react/index.js"
     },
     "./styles.css": "./dist/styles.css",
     "./base.css": "./dist/base.css",

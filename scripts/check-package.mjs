@@ -1,8 +1,30 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 
 const packageJson = JSON.parse(await readFile("package.json", "utf8"));
 assert.deepEqual(packageJson.sideEffects, ["**/*.css"]);
+assert.equal(packageJson.type, "module");
+assert.equal(packageJson.types, "./dist/index.d.ts");
+assert.deepEqual(packageJson.engines, { node: "^20.19.0 || >=22.12.0" });
+assert.deepEqual(packageJson.exports["."], {
+  types: "./dist/index.d.ts",
+  import: "./dist/index.js",
+  default: "./dist/index.js",
+});
+assert.deepEqual(packageJson.exports["./react"], {
+  types: "./dist/react/index.d.ts",
+  import: "./dist/react/index.js",
+  default: "./dist/react/index.js",
+});
+
+const require = createRequire(import.meta.url);
+const requiredCore = require("field-search");
+const requiredReact = require("field-search/react");
+assert.equal(typeof requiredCore.parse, "function");
+assert.equal(typeof requiredCore.stringify, "function");
+assert.equal(typeof requiredReact.SearchInput, "object");
+assert.equal(typeof requiredReact.useFieldSearch, "function");
 
 for (const file of [
   "dist/index.js",
