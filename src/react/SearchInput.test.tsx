@@ -637,6 +637,22 @@ describe("SearchInput", () => {
     expect(editor.getAttribute("aria-describedby")).toBe(error?.id);
   });
 
+  it("reports the editing context once per edit", () => {
+    const onContextChange = vi.fn();
+    const { editor } = renderControlled({ value: "kind:", onContextChange });
+    onContextChange.mockClear();
+
+    type(editor, "f", { anchor: 5, focus: 5 });
+
+    // The commit reports the new context itself so the caller's state update
+    // batches with ours. The effect that reports caret moves must recognise
+    // that state as already reported rather than sending it a second time.
+    expect(onContextChange).toHaveBeenCalledTimes(1);
+    expect(onContextChange).toHaveBeenCalledWith(
+      expect.objectContaining({ caret: 6, valid: true }),
+    );
+  });
+
   it("reports caret-only context changes", () => {
     const onContextChange = vi.fn();
     const { editor } = renderControlled({

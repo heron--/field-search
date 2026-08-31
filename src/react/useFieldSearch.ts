@@ -69,6 +69,14 @@ export interface UseFieldSearchOptions {
   onContextChange?: (context: SearchContext) => void;
 }
 
+/** Shared so the default does not change identity on every render. */
+const NO_FIELDS: FieldSuggestion[] = [];
+
+/** Identifies an editing state, for spotting one that was already reported. */
+function stateSignature(value: string, selection: EditorSelection) {
+  return `${selection.anchor}:${selection.focus}:${value}`;
+}
+
 export interface FieldSearchController {
   caret: number;
   selection: EditorSelection;
@@ -158,7 +166,7 @@ export function defaultSuggestions(
 export function useFieldSearch({
   value,
   onValueChange,
-  fields = [],
+  fields = NO_FIELDS,
   suggestions,
   onContextChange,
 }: UseFieldSearchOptions): FieldSearchController {
@@ -168,6 +176,8 @@ export function useFieldSearch({
   const [activeIndex, setActiveIndex] = React.useState(0);
   const pendingSelectionRef = React.useRef<EditorSelection | null>(null);
   const history = useHistory(value);
+  /** The editing state most recently handed to `onContextChange`. */
+  const reportedRef = React.useRef<string | null>(null);
   /** The last value this controller put into history, committed or observed. */
   const recordedRef = React.useRef(value);
 
@@ -207,9 +217,16 @@ export function useFieldSearch({
   );
   const items = suggestions ?? derivedItems;
 
+  // Caret movement and externally replaced values reach the caller here. Edits
+  // made through `commit` are reported from inside the commit instead, so the
+  // caller's state update batches with ours rather than chaining a second
+  // render onto every keystroke.
   React.useEffect(() => {
+    const current = stateSignature(value, selection);
+    if (reportedRef.current === current) return;
+    reportedRef.current = current;
     onContextChange?.(context);
-  }, [context, onContextChange]);
+  }, [context, onContextChange, selection, value]);
 
   React.useEffect(() => {
     setActiveIndex((current) => {
@@ -247,7 +264,13 @@ export function useFieldSearch({
           : nextSelection;
       const nextContext = createSearchContext(nextValue, resolved);
       pendingSelectionRef.current = resolved;
-      setSelectionState(resolved);
+      // Bail out when the caret has not moved: a fresh object here would change
+      // `selection`, and with it `context`, for no reason.
+      setSelectionState((current) =>
+        current.anchor === resolved.anchor && current.focus === resolved.focus
+          ? current
+          : resolved,
+      );
       recordedRef.current = nextValue;
       if (options?.history !== "skip") {
         history.record(
@@ -255,7 +278,9 @@ export function useFieldSearch({
           options?.history ?? "push",
         );
       }
+      reportedRef.current = stateSignature(nextValue, resolved);
       onValueChange(nextValue, nextContext);
+      onContextChange?.(nextContext);
       return {
         value: nextValue,
         caret: resolved.focus,
@@ -263,7 +288,7 @@ export function useFieldSearch({
         context: nextContext,
       };
     },
-    [history, onValueChange],
+    [history, onContextChange, onValueChange],
   );
 
   // A value replaced from outside — a reset button, a saved search — is a state

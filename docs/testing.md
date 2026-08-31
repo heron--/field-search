@@ -153,6 +153,21 @@ lands as `AND`. Write setup queries in canonical form. Use `typeQuery` when
 auto-pairing, normalization, or undo coalescing is the subject, because all
 three hang off real key events.
 
+### Reproducing a failure that only happens in CI
+
+CI runs on a slower machine than most laptops, which changes how React
+interleaves renders. A check that fails there and passes locally is usually
+reproducible by slowing the page down:
+
+```sh
+THROTTLE=4 npm run visual:check
+THROTTLE=8 npm run visual -- --only=operator-normalization
+```
+
+`THROTTLE` applies CPU throttling at that multiplier. It turned an error that
+appeared in roughly one local run in three into one that reproduced every time,
+which is what made it fixable.
+
 ### Adding a step
 
 ```ts

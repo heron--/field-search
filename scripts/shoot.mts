@@ -482,16 +482,28 @@ const steps: Step[] = [
   },
 
   {
-    name: "typing-pipeline",
+    name: "auto-pairing",
     async run(context) {
-      // Auto-pairing and operator normalization both hang off keydown, which
-      // only real keystrokes reach.
+      // Delimiters pair on keydown, which only real keystrokes reach: typing
+      // `[` inserts `[]`, and typing the closer steps over it.
       await context.typeQuery("calories:[10 TO 90]");
       await context.waitForQuery("calories:[10 TO 90]");
+      await context.typeQuery('name:"granny smith"');
+      await context.waitForQuery('name:"granny smith"');
+    },
+  },
 
+  {
+    name: "operator-normalization",
+    async run(context) {
       await context.typeQuery("kind:fruit and colors:green");
       await context.waitForQuery("kind:fruit AND colors:green");
+    },
+  },
 
+  {
+    name: "chip-complete",
+    async run(context) {
       // A separator completing a valid chip commits the query.
       await context.setQuery("kind:fruit");
       await context.caretTo(10);
@@ -708,6 +720,12 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 // Headless Chrome only paints a caret in a frame it considers focused.
 await page.bringToFront();
+// Slowing the page down makes render-interleaving bugs deterministic. CI is a
+// slower machine than most laptops, so a check that only fails there is often
+// reproducible here with THROTTLE=4.
+if (process.env.THROTTLE) {
+  await page.emulateCPUThrottling(Number(process.env.THROTTLE));
+}
 await page.setViewport(DESKTOP);
 
 const pageProblems: { step: string; text: string }[] = [];
