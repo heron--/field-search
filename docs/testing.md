@@ -153,6 +153,23 @@ lands as `AND`. Write setup queries in canonical form. Use `typeQuery` when
 auto-pairing, normalization, or undo coalescing is the subject, because all
 three hang off real key events.
 
+### Two steps that reach paths a browser will not take on its own
+
+`deletion-fallback` removes `InputEvent.prototype.getTargetRanges` for the
+duration of the step. Every current engine supplies target ranges — Firefox
+since version 87 — so the component's own deletion arithmetic would otherwise
+never run against real keystrokes. Taking the API away is the only way to reach
+it outside jsdom, and it covers word deletion too, which is awkward to trigger
+portably by keystroke.
+
+`composition` drives an IME through CDP `Input.imeSetComposition`. Composition
+is the one edit the component lets the browser perform, so it is the one path
+where the DOM leads and the model follows — and the only path where the browser
+mutates nodes React believes it owns. That is why the segments are keyed on a
+generation counter which the composition handler bumps: the reconciling render
+has to discard the mutated nodes rather than patch them. Without it, composing
+`日本` into `name:` yields `name:日本日本`.
+
 ### Reproducing a failure that only happens in CI
 
 CI runs on a slower machine than most laptops, which changes how React

@@ -326,6 +326,12 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
     const [dismissed, setDismissed] = React.useState(false);
     const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null);
     const [plaintextOnly, setPlaintextOnly] = React.useState(false);
+    /**
+     * Bumped when the browser has edited the field behind React's back, which
+     * only composition does. Keying the segments on it discards the mutated
+     * nodes instead of reconciling against them.
+     */
+    const [generation, setGeneration] = React.useState(0);
 
     const controller = useFieldSearch({
       value,
@@ -785,6 +791,11 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
                       controller.setSelection(at);
                     } else {
                       setDismissed(false);
+                      // React's tree still describes the field as it was before
+                      // the IME wrote to it. Reconciling against that would
+                      // leave the composed text in place and add it again, so
+                      // the segments are rebuilt from scratch instead.
+                      setGeneration((current) => current + 1);
                       controller.commit(
                         normalizeEditingOperators(composed, at.focus),
                         at,
@@ -813,69 +824,71 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
                   applyEdit({ anchor: start, focus: end }, "");
                 }}
               >
-                {controller.segments.map((segment, index) => {
-                  if (segment.kind === "chip") {
-                    const hovered = hoveredIndex === index;
-                    return (
-                      <Chip
-                        key={`${index}-chip`}
-                        segment={segment}
-                        hovered={hovered}
-                        showError={revealErrors}
-                        className={classNames.chip}
-                        classNames={chipClassNames}
-                        onMouseEnter={() => setHoveredIndex(index)}
-                        onMouseLeave={() =>
-                          setHoveredIndex((current) =>
-                            current === index ? null : current,
-                          )
-                        }
-                        end={
-                          editable ? (
-                            <button
-                              type="button"
-                              className={join("fs-close", classNames.close)}
-                              data-slot="remove"
-                              contentEditable={false}
-                              aria-label={`Remove ${segment.text}`}
-                              onKeyDown={(event) => {
-                                if (event.key !== "Escape") return;
-                                event.preventDefault();
-                                editorRef.current?.focus();
-                              }}
-                              onMouseDown={(event) => event.preventDefault()}
-                              onClick={() => remove(segment, index)}
-                            >
-                              {CloseIcon}
-                            </button>
-                          ) : undefined
-                        }
-                      >
-                        {renderChip?.(segment, {
-                          index,
-                          hovered,
-                          invalid: Boolean(revealErrors && segment.error),
-                        })}
-                      </Chip>
-                    );
-                  }
+                <React.Fragment key={generation}>
+                  {controller.segments.map((segment, index) => {
+                    if (segment.kind === "chip") {
+                      const hovered = hoveredIndex === index;
+                      return (
+                        <Chip
+                          key={`${index}-chip`}
+                          segment={segment}
+                          hovered={hovered}
+                          showError={revealErrors}
+                          className={classNames.chip}
+                          classNames={chipClassNames}
+                          onMouseEnter={() => setHoveredIndex(index)}
+                          onMouseLeave={() =>
+                            setHoveredIndex((current) =>
+                              current === index ? null : current,
+                            )
+                          }
+                          end={
+                            editable ? (
+                              <button
+                                type="button"
+                                className={join("fs-close", classNames.close)}
+                                data-slot="remove"
+                                contentEditable={false}
+                                aria-label={`Remove ${segment.text}`}
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Escape") return;
+                                  event.preventDefault();
+                                  editorRef.current?.focus();
+                                }}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => remove(segment, index)}
+                              >
+                                {CloseIcon}
+                              </button>
+                            ) : undefined
+                          }
+                        >
+                          {renderChip?.(segment, {
+                            index,
+                            hovered,
+                            invalid: Boolean(revealErrors && segment.error),
+                          })}
+                        </Chip>
+                      );
+                    }
 
-                  const segmentClassName =
-                    segment.kind === "operator"
-                      ? join("fs-operator", classNames.operator)
-                      : segment.kind === "paren"
-                        ? join("fs-top-paren", classNames.paren)
-                        : undefined;
-                  return (
-                    <span
-                      key={`${index}-${segment.kind}`}
-                      className={segmentClassName}
-                      data-slot={segment.kind}
-                    >
-                      {segment.text}
-                    </span>
-                  );
-                })}
+                    const segmentClassName =
+                      segment.kind === "operator"
+                        ? join("fs-operator", classNames.operator)
+                        : segment.kind === "paren"
+                          ? join("fs-top-paren", classNames.paren)
+                          : undefined;
+                    return (
+                      <span
+                        key={`${index}-${segment.kind}`}
+                        className={segmentClassName}
+                        data-slot={segment.kind}
+                      >
+                        {segment.text}
+                      </span>
+                    );
+                  })}
+                </React.Fragment>
               </div>
 
               {name !== undefined && (
