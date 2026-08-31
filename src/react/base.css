@@ -65,10 +65,13 @@
   }
 
   /**
-   * Room for the remove control is reserved permanently, so revealing it never
-   * reflows the text sitting under the pointer.
+   * The chip grows to make room for the remove control as it appears, rather
+   * than holding that room open while nothing is in it. Only the trailing edge
+   * moves, so the pointer stays inside the chip it just grew.
    */
-  :where(.fs-chip[data-removable]) {
+  :where(.fs-chip[data-removable]:hover),
+  :where(.fs-chip[data-removable]:focus-within),
+  :where(.fs-chip[data-removable][data-hovered="true"]) {
     padding-inline-end: calc(
       var(--fs-close-width, 16px) + var(--fs-close-gap, 2px)
     );
@@ -104,13 +107,32 @@
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
-    opacity: var(--fs-close-idle-opacity, 0.45);
+    /* Out of the chip's box until the chip grows around it. */
+    opacity: 0;
+    pointer-events: none;
   }
 
   /* Descendant, not child: the control sits inside `.fs-close-anchor`. */
-  :where(.fs-chip:hover, .fs-chip[data-hovered="true"]) :where(.fs-close),
-  :where(.fs-close:hover, .fs-close:focus-visible) {
+  :where(.fs-chip:hover, .fs-chip:focus-within, .fs-chip[data-hovered="true"])
+    :where(.fs-close) {
     opacity: 1;
+    pointer-events: auto;
+  }
+
+  /**
+   * Nothing to hover with, so the room stays open and the control stays shown.
+   */
+  @media (hover: none), (pointer: coarse) {
+    :where(.fs-chip[data-removable]) {
+      padding-inline-end: calc(
+        var(--fs-close-width, 16px) + var(--fs-close-gap, 2px)
+      );
+    }
+
+    :where(.fs-close) {
+      opacity: 1;
+      pointer-events: auto;
+    }
   }
 
   :where(.fs-close) > svg {

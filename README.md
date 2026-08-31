@@ -505,7 +505,10 @@ Theme the input by setting custom properties on its root or a wrapper:
 }
 ```
 
-Chip geometry is adjustable too:
+Chip geometry is adjustable too. The remove control appears on hover and the
+chip grows to fit it, so these tokens set both its size and how much the chip
+grows by. Where there is no hover to reveal it — a coarse pointer — the room
+stays open and the control stays visible.
 
 ```css
 .inventory-search {
@@ -515,7 +518,6 @@ Chip geometry is adjustable too:
   --fs-chip-radius: 4px;
   --fs-close-width: 16px; /* width of the remove control */
   --fs-close-gap: 2px; /* space reserved between text and control */
-  --fs-close-idle-opacity: 0; /* raise to keep remove controls always visible */
 }
 ```
 

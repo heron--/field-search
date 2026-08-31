@@ -11,7 +11,6 @@
     --fs-chip-gap: 0px;
     --fs-close-width: 16px;
     --fs-close-gap: 2px;
-    --fs-close-idle-opacity: 0;
     --fs-close-icon: 0.85em;
     --fs-fg: #1c1917;
     --fs-muted: #78716c;
@@ -197,11 +196,9 @@
     }
   }
 
-  /* Nothing to hover with, so the control cannot be hidden behind hovering. */
   @media (hover: none), (pointer: coarse) {
     :where(.fs-root) {
       --fs-close-width: 24px;
-      --fs-close-idle-opacity: 1;
     }
   }
 
@@ -212,10 +209,6 @@
 
     :where(.fs-field:focus-within, .fs-close:focus-visible) {
       outline: 2px solid Highlight;
-    }
-
-    :where(.fs-close) {
-      opacity: 1;
     }
   }
 }
