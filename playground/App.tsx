@@ -44,6 +44,11 @@ const EXAMPLES: { label: string; query: string; note: string }[] = [
     note: "juxtaposition, no operator",
   },
   {
+    label: "Explicit OR",
+    query: "kind:fruit OR kind:nut",
+    note: "a top-level boolean, not a value list",
+  },
+  {
     label: "Negation",
     query: "kind:fruit -colors:green",
     note: "- excludes a filter",
@@ -221,38 +226,34 @@ export default function App() {
   return (
     <main className="pg">
       <header className="pg-head">
-        <h1>field-search</h1>
-        <p>
-          Type a query. Chips are derived from the string itself — the input is
-          controlled by <code>value</code>, while results follow the last valid
-          search commit.
-        </p>
+        <div>
+          <h1>field-search</h1>
+          <p>
+            Type a query. Chips are derived from the string itself — the input
+            is controlled by <code>value</code>, while results follow the last
+            valid search commit.
+          </p>
+        </div>
+        <div className="pg-skins">
+          {SKINS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="pg-skin"
+              data-active={option.id === skin || undefined}
+              onClick={() => setSkin(option.id)}
+              title={option.note}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </header>
-
-      <div className="pg-skins">
-        {SKINS.map((option) => (
-          <button
-            key={option.id}
-            type="button"
-            className="pg-skin"
-            data-active={option.id === skin || undefined}
-            onClick={() => setSkin(option.id)}
-            title={option.note}
-          >
-            {option.label}
-          </button>
-        ))}
-        <span className="pg-note">
-          {SKINS.find((s) => s.id === skin)?.note}
-        </span>
-      </div>
 
       <div className={`pg-search${skin === "midnight" ? " pg-midnight" : ""}`}>
         <div className="pg-search-label">
           <label htmlFor="produce-search">Search produce</label>
-          <span>
-            <code>origin</code> values come from the async country source below
-          </span>
+          <span>{SKINS.find((s) => s.id === skin)?.note}</span>
         </div>
         <SearchInput
           id="produce-search"
@@ -278,7 +279,7 @@ export default function App() {
         />
       </div>
 
-      <section className="pg-examples">
+      <section className="pg-examples" aria-label="Example queries">
         {EXAMPLES.map((example) => (
           <button
             key={example.query}
@@ -296,112 +297,111 @@ export default function App() {
         ))}
       </section>
 
-      <section className="pg-panels">
-        <div className="pg-panel">
-          <h2>Caret context</h2>
-          <dl>
-            <dt>target</dt>
-            <dd>{context?.target.kind ?? "field"}</dd>
-            <dt>field</dt>
-            <dd>{context?.target.field ?? "—"}</dd>
-            <dt>fragment</dt>
-            <dd>{context?.target.fragment || "—"}</dd>
-            <dt>parses</dt>
-            <dd>{context ? (context.ast ? "yes" : "no") : "—"}</dd>
-            <dt>valid</dt>
-            <dd>{context ? (context.valid ? "yes" : "no") : "—"}</dd>
-          </dl>
-          <p className="pg-note">
-            This is what <code>onContextChange</code> hands you, so a caller
-            knows which options to fetch.
-          </p>
-        </div>
+      <div className="pg-body">
+        <section className="pg-results">
+          <h2 className="pg-results-head">
+            {results === null
+              ? "Committed query is invalid"
+              : `${results.length} of ${PRODUCE.length}${
+                  context && !context.valid ? " · showing previous search" : ""
+                }`}
+          </h2>
+          {results !== null && (
+            <div className="pg-table-scroll">
+              <table className="pg-table">
+                <thead>
+                  <tr>
+                    <th>name</th>
+                    <th>kind</th>
+                    <th>colors</th>
+                    <th>origin</th>
+                    <th className="pg-num">calories</th>
+                    <th className="pg-num">price</th>
+                    <th className="pg-num">seeds</th>
+                    <th>harvested</th>
+                    <th>tags</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((row) => (
+                    <tr key={row.name}>
+                      <td>{row.name}</td>
+                      <td>{row.kind}</td>
+                      <td>{row.colors.join(", ")}</td>
+                      <td>{row.origin}</td>
+                      <td className="pg-num">{row.calories}</td>
+                      <td className="pg-num">{row.price.toFixed(2)}</td>
+                      <td className="pg-num">{row.seeds}</td>
+                      <td>{row.harvested}</td>
+                      <td>{row.tags.join(", ")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
-        <div className="pg-panel">
-          <h2>Round trip</h2>
-          <code className="pg-roundtrip">{roundTrip || "—"}</code>
-          <p className="pg-note pg-committed">
-            Committed query: <code>{searched || "(all records)"}</code>
-          </p>
-        </div>
-      </section>
-
-      <section className="pg-async-source">
-        <div className="pg-section-head">
-          <div>
-            <h2>Async country source</h2>
-            <p>
-              The main input loads these country values for <code>origin</code>{" "}
-              after a simulated {ASYNC_DELAY} ms request. Try{" "}
-              <code>origin:aus</code>, accept Australia, and commit the query to
-              filter the results.
+        <aside className="pg-side">
+          <div className="pg-panel">
+            <h2>Caret context</h2>
+            <dl>
+              <dt>target</dt>
+              <dd>{context?.target.kind ?? "field"}</dd>
+              <dt>field</dt>
+              <dd>{context?.target.field ?? "—"}</dd>
+              <dt>fragment</dt>
+              <dd>{context?.target.fragment || "—"}</dd>
+              <dt>parses</dt>
+              <dd>{context ? (context.ast ? "yes" : "no") : "—"}</dd>
+              <dt>valid</dt>
+              <dd>{context ? (context.valid ? "yes" : "no") : "—"}</dd>
+            </dl>
+            <p className="pg-note">
+              This is what <code>onContextChange</code> hands you, so a caller
+              knows which options to fetch.
             </p>
           </div>
-          <span className="pg-api-badge">{ASYNC_ORIGINS.length} rows</span>
-        </div>
-        <div className="pg-source-scroll">
-          <table className="pg-source-table">
-            <thead>
-              <tr>
-                <th>produce</th>
-                <th>country</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ASYNC_ORIGINS.map((row) => (
-                <tr key={row.produce}>
-                  <td>{row.produce}</td>
-                  <td>{row.country}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
-      <section>
-        <h2 className="pg-results-head">
-          {results === null
-            ? "Committed query is invalid"
-            : `${results.length} of ${PRODUCE.length}${
-                context && !context.valid ? " · showing previous search" : ""
-              }`}
-        </h2>
-        {results !== null && (
-          <div className="pg-table-scroll">
-            <table className="pg-table">
-              <thead>
-                <tr>
-                  <th>name</th>
-                  <th>kind</th>
-                  <th>colors</th>
-                  <th>origin</th>
-                  <th className="pg-num">calories</th>
-                  <th className="pg-num">price</th>
-                  <th className="pg-num">seeds</th>
-                  <th>harvested</th>
-                  <th>tags</th>
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((row) => (
-                  <tr key={row.name}>
-                    <td>{row.name}</td>
-                    <td>{row.kind}</td>
-                    <td>{row.colors.join(", ")}</td>
-                    <td>{row.origin}</td>
-                    <td className="pg-num">{row.calories}</td>
-                    <td className="pg-num">{row.price.toFixed(2)}</td>
-                    <td className="pg-num">{row.seeds}</td>
-                    <td>{row.harvested}</td>
-                    <td>{row.tags.join(", ")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="pg-panel">
+            <h2>Round trip</h2>
+            <code className="pg-roundtrip">{roundTrip || "—"}</code>
+            <p className="pg-note pg-committed">
+              Committed query: <code>{searched || "(all records)"}</code>
+            </p>
           </div>
-        )}
-      </section>
+
+          <div className="pg-panel pg-async-source">
+            <div className="pg-section-head">
+              <h2>Async country source</h2>
+              <span className="pg-api-badge">{ASYNC_ORIGINS.length} rows</span>
+            </div>
+            <p className="pg-note">
+              Loaded for <code>origin</code> after a simulated {ASYNC_DELAY} ms
+              request. Try <code>origin:aus</code>, accept Australia, and commit
+              to filter the results.
+            </p>
+            <div className="pg-source-scroll">
+              <table className="pg-source-table">
+                <thead>
+                  <tr>
+                    <th>produce</th>
+                    <th>country</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ASYNC_ORIGINS.map((row) => (
+                    <tr key={row.produce}>
+                      <td>{row.produce}</td>
+                      <td>{row.country}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </aside>
+      </div>
     </main>
   );
 }
