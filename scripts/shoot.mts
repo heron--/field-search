@@ -26,6 +26,8 @@ const ROOT = ".fs-root";
 const RESTING = "kind:fruit -colors:green calories:[10 TO 90]";
 /** Undo is Cmd on macOS, Ctrl elsewhere — CI runs on Linux. */
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
+/** Delete-word is Option on macOS, Ctrl elsewhere. */
+const WORD_MOD = process.platform === "darwin" ? "Alt" : "Control";
 const DESKTOP = { width: 1180, height: 900, deviceScaleFactor: 2 };
 const MOBILE = {
   width: 390,
@@ -455,6 +457,90 @@ const steps: Step[] = [
       await context.caretTo("name:a👍🏽".length);
       await context.page.keyboard.press("Backspace");
       await context.waitForQuery("name:a");
+    },
+  },
+
+  {
+    name: "deletion-fallback",
+    async run(context) {
+      // Engines that supply no target range make the component compute the
+      // deletion itself. Every current browser supplies one, so the only way to
+      // exercise that code against real keystrokes is to take the API away.
+      await context.page.evaluate(
+        `window.__realTargetRanges = InputEvent.prototype.getTargetRanges;
+         InputEvent.prototype.getTargetRanges = function () { return []; };`,
+      );
+      try {
+        await context.setQuery("name:a👍🏽");
+        await context.caretTo("name:a👍🏽".length);
+        await context.page.keyboard.press("Backspace");
+        // One grapheme, not one code unit: the surrogate pair and its modifier
+        // go together.
+        await context.waitForQuery("name:a");
+
+        await context.setQuery("kind:fruit apple");
+        await context.caretTo(16);
+        await context.page.keyboard.down(WORD_MOD);
+        await context.page.keyboard.press("Backspace");
+        await context.page.keyboard.up(WORD_MOD);
+        await context.waitForQuery("kind:fruit ");
+      } finally {
+        await context.page.evaluate(
+          `InputEvent.prototype.getTargetRanges = window.__realTargetRanges;`,
+        );
+      }
+    },
+  },
+
+  {
+    name: "composition",
+    async run(context) {
+      // Composition is the one edit the component lets the browser perform, so
+      // it is the one path where the DOM leads and the model follows.
+      const cdp = await context.page.createCDPSession();
+      try {
+        await context.setQuery("name:");
+        await context.caretTo(5);
+
+        for (const text of ["に", "にほ", "にほん"]) {
+          await cdp.send("Input.imeSetComposition", {
+            text,
+            selectionStart: text.length,
+            selectionEnd: text.length,
+          });
+        }
+
+        // Mid-composition the DOM carries the preedit and the model must not
+        // have moved, or React would have clobbered what the IME is editing.
+        const midway = await context.query();
+        check(
+          midway.includes("にほん"),
+          `the preedit is not in the field: ${JSON.stringify(midway)}`,
+        );
+
+        await cdp.send("Input.insertText", { text: "日本" });
+        await context.waitForQuery("name:日本");
+
+        const caret = await context.caretOffset();
+        check(caret === 7, `caret sits at ${caret}, expected 7`);
+
+        // Harder: compose in the middle, with segments either side that have to
+        // be re-cut around the composed text.
+        await context.setQuery("kind:fruit apple");
+        await context.caretTo(10);
+        await cdp.send("Input.imeSetComposition", {
+          text: "かき",
+          selectionStart: 2,
+          selectionEnd: 2,
+        });
+        await cdp.send("Input.insertText", { text: "柿" });
+        await context.waitForQuery("kind:fruit柿 apple");
+
+        const middle = await context.caretOffset();
+        check(middle === 11, `caret sits at ${middle}, expected 11`);
+      } finally {
+        await cdp.detach();
+      }
     },
   },
 
