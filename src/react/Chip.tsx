@@ -99,10 +99,14 @@ export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
   showError?: boolean;
   classNames?: ChipClassNames;
   /**
-   * Trailing content rendered inside the chip's own box, after its text —
-   * e.g. a remove control. Keeping it inside the same element means it
-   * automatically shares the chip's background, radius, and elevation
-   * instead of needing separately coordinated styling.
+   * Trailing content rendered inside the chip's own box, after its text — e.g.
+   * a remove control. It shares the chip's background, radius, and elevation,
+   * and the chip reserves room for it so revealing it never reflows the text.
+   *
+   * It is wrapped in a text-free positioned anchor that gives it a containing
+   * block matching the chip's own box. The anchor exists because the chip must
+   * not be positioned itself: a positioned inline paints after the text phase
+   * the caret is drawn in, and its background would hide the caret.
    */
   end?: React.ReactNode;
 }
@@ -110,9 +114,14 @@ export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
 /**
  * One chip: a bare term, or a `field:value` filter.
  *
- * Renders inside a `pointer-events: none` layer sitting behind a transparent
- * input, so it carries no interaction of its own — hover is tracked by the
- * input via hit-testing, and the close button is rendered above the input.
+ * Renders as an inline box inside the editable field, so the text it paints is
+ * the query text the caret moves through — there is no second copy to keep
+ * aligned. That is what lets it carry real padding, a radius, and interactive
+ * children.
+ *
+ * The pieces it emits always concatenate back to `segment.text`. Anything
+ * passed as `children` must preserve that too, or the caret will drift; see
+ * `renderChip` on `SearchInput`.
  */
 function join(base: string, extra?: string) {
   return extra ? `${base} ${extra}` : base;
@@ -194,15 +203,20 @@ export const Chip = React.forwardRef<HTMLSpanElement, ChipProps>(function Chip(
     <span
       {...props}
       ref={ref}
-      className={join(end ? "fs-chip fs-active-chip" : "fs-chip", className)}
+      className={join("fs-chip", className)}
       data-slot="chip"
       data-negated={negated || undefined}
       data-hovered={hovered || undefined}
       data-invalid={fault ? true : undefined}
+      data-removable={end ? true : undefined}
       title={title ?? fault}
     >
-      {end ? <span aria-hidden="true">{content}</span> : content}
-      {end}
+      {content}
+      {end && (
+        <span className="fs-close-anchor" data-fs-nontext="" aria-hidden="true">
+          {end}
+        </span>
+      )}
     </span>
   );
 });

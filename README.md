@@ -61,9 +61,9 @@ export function InventorySearch() {
 it suggests field names. After a field and colon, it suggests that field's
 `values`. Values containing spaces or parentheses are quoted when inserted.
 
-`SearchInput` forwards its ref to the native input and accepts native input
-attributes such as `id`, `name`, `placeholder`, `disabled`, `required`, and
-ARIA labeling.
+`SearchInput` renders a single `contenteditable` field and forwards its ref to
+it. It accepts `id`, `name`, `placeholder`, `disabled`, `readOnly`, `required`,
+`dir`, `spellCheck`, `tabIndex`, and ARIA labeling, plus any `div` attribute.
 
 ## Query syntax
 
@@ -235,11 +235,74 @@ value contains syntax characters. When an accepted value completes the final
 chip, `SearchInput` adds a trailing space so the user can continue with the
 next filter. Field suggestions such as `origin:` do not add a space.
 
+## The editable field
+
+`SearchInput` is one `contenteditable` element whose own text is the query.
+Chips are inline spans inside it, so they are laid out by the same pass that
+lays out the characters the caret moves through:
+
+```html
+<div class="fs-root" data-slot="root">
+  <div class="fs-field" data-slot="field">
+    <div
+      class="fs-editor"
+      data-slot="editor"
+      contenteditable="plaintext-only"
+      role="combobox"
+    >
+      <span class="fs-chip" data-slot="chip">
+        <span class="fs-field-name">kind</span><span class="fs-punct">:</span
+        ><span>fruit</span>
+        <span class="fs-close-anchor" data-fs-nontext>
+          <button class="fs-close" data-slot="remove" contenteditable="false">
+            …
+          </button>
+        </span>
+      </span>
+      <span data-slot="space"> </span>
+      <span class="fs-chip" data-slot="chip">…</span>
+    </div>
+  </div>
+</div>
+```
+
+Two consequences are worth knowing about:
+
+- **Chips have a real box model.** Padding, gaps, a radius, and interactive
+  children all work, because there is no second copy of the string to stay
+  aligned with. Removal controls are ordinary buttons in ordinary tab order.
+- **The rendered text must equal the query.** Every segment tiles the string end
+  to end, and offsets are derived by walking text nodes. Anything you render via
+  `renderChip` has to concatenate back to `segment.text`; a development-only
+  check reports drift. Chrome for the editor's own furniture is excluded by
+  marking it `data-fs-nontext`, which is why the remove buttons cost no offsets.
+- **A chip must never be positioned.** A positioned inline paints in the
+  positioned-descendants phase, which comes _after_ the text phase the browser
+  draws the caret in — so a `position` on `.fs-chip` makes its background paint
+  over the caret, and the caret vanishes wherever a chip covers it. The remove
+  control takes its containing block from `.fs-close-anchor` instead, which
+  carries no text and no background of its own.
+
+Every edit is intercepted on `beforeinput`, replayed against the query string,
+and re-rendered — so the component, not the browser, decides what the field
+contains. That also means the field owns its own undo stack: <kbd>Cmd</kbd>/<kbd>Ctrl</kbd> +<kbd>Z</kbd> and <kbd>Shift</kbd>+<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Z</kbd>
+work, coalescing a run of typing into one step and breaking it at word
+boundaries. Composition (IME) is the one edit the browser is allowed to perform;
+the model catches up on `compositionend`.
+
+The field is a single line: `white-space: pre` on `.fs-editor` scrolls it
+horizontally. Changing that one declaration to `pre-wrap` is all a wrapping
+field needs.
+
+`name` is mirrored into a hidden input so the query submits with a surrounding
+form. `required` sets `aria-required`; a query cannot take part in native form
+validation.
+
 ## `SearchInput` props
 
-`SearchInputProps` extends native `input` attributes except `children`,
-`className`, `defaultValue`, `onChange`, `style`, and `value`, which have
-component-specific equivalents below.
+`SearchInputProps` extends native `div` attributes except `children`,
+`className`, `contentEditable`, `defaultValue`, `onChange`, `onSelect`, and
+`style`, which have component-specific equivalents below.
 
 ### Value and events
 
@@ -252,9 +315,11 @@ component-specific equivalents below.
 | `onSuggestionSelect` | `(item, index) => void`    | —        | Called after a suggestion is accepted.                             |
 | `onSegmentRemove`    | `(segment, index) => void` | —        | Called after a chip is removed.                                    |
 
-`SearchContext` contains `caret`, `target`, `ast`, `error`, `segments`, and
-`valid`. `target` identifies the field or value fragment at the caret and is
-designed for suggestion requests.
+`SearchContext` contains `caret`, `selection`, `target`, `ast`, `error`,
+`segments`, and `valid`. `caret` is the focus offset; `selection` is
+`{ anchor, focus }` and is collapsed when nothing is selected. `target`
+identifies the field or value fragment at the caret and is designed for
+suggestion requests.
 
 ### Suggestions
 
@@ -278,24 +343,24 @@ designed for suggestion requests.
 | `searchOnBlur`         | `boolean`              | `true`        | Commits a valid draft when focus leaves the component.          |
 | `searchOnChipComplete` | `boolean`              | `true`        | Commits after a suggestion or separator completes a valid chip. |
 | `searchOnRemove`       | `boolean`              | `true`        | Commits the remaining valid query after chip removal.           |
-| `showError`            | `boolean`              | `true`        | Shows parse errors after the input loses focus.                 |
+| `showError`            | `boolean`              | `true`        | Shows parse errors after the field loses focus.                 |
 | `renderError`          | `(error) => ReactNode` | Error message | Custom error content.                                           |
 
 ### Rendering and styling
 
-| Prop                   | Type                                                  | Default                                             | Description                                                                                                 |
-| ---------------------- | ----------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `className`            | `string`                                              | —                                                   | Class on the component root.                                                                                |
-| `style`                | `CSSProperties`                                       | —                                                   | Inline styles on the component root.                                                                        |
-| `classNames`           | `SearchInputClassNames`                               | `{}`                                                | Classes for root, field, layer, input, chip, close, operator, paren, popover, suggestions, and error parts. |
-| `chipClassNames`       | `ChipClassNames`                                      | —                                                   | Classes for content within every chip.                                                                      |
-| `suggestionClassNames` | `SuggestionClassNames`                                | —                                                   | Classes for content within the suggestion list.                                                             |
-| `renderChip`           | `(segment, { index, hovered, invalid }) => ReactNode` | —                                                   | Replaces a chip's contents.                                                                                 |
-| `slots`                | `SearchInputSlots`                                    | `div` elements                                      | Replaces the root, field, layer, or error element type.                                                     |
-| `rootProps`            | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional root attributes.                                                                                 |
-| `errorProps`           | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional error attributes.                                                                                |
-| `popoverProps`         | Radix `Popover.Content` props                         | `{ side: "bottom", align: "start", sideOffset: 6 }` | Controls popover placement and behavior.                                                                    |
-| `portalContainer`      | `HTMLElement \| null`                                 | Component root                                      | Portal destination; the root preserves scoped theme variables.                                              |
+| Prop                   | Type                                                  | Default                                             | Description                                                                                           |
+| ---------------------- | ----------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `className`            | `string`                                              | —                                                   | Class on the component root.                                                                          |
+| `style`                | `CSSProperties`                                       | —                                                   | Inline styles on the component root.                                                                  |
+| `classNames`           | `SearchInputClassNames`                               | `{}`                                                | Classes for root, field, editor, chip, close, operator, paren, popover, suggestions, and error parts. |
+| `chipClassNames`       | `ChipClassNames`                                      | —                                                   | Classes for content within every chip.                                                                |
+| `suggestionClassNames` | `SuggestionClassNames`                                | —                                                   | Classes for content within the suggestion list.                                                       |
+| `renderChip`           | `(segment, { index, hovered, invalid }) => ReactNode` | —                                                   | Replaces a chip's contents. Must render exactly `segment.text`.                                       |
+| `slots`                | `SearchInputSlots`                                    | `div` elements                                      | Replaces the root, field, or error element type.                                                      |
+| `rootProps`            | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional root attributes.                                                                           |
+| `errorProps`           | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional error attributes.                                                                          |
+| `popoverProps`         | Radix `Popover.Content` props                         | `{ side: "bottom", align: "start", sideOffset: 6 }` | Controls popover placement and behavior.                                                              |
+| `portalContainer`      | `HTMLElement \| null`                                 | Component root                                      | Portal destination; the root preserves scoped theme variables.                                        |
 
 ## Headless composition
 
@@ -352,9 +417,23 @@ function HeadlessSearch() {
 | `suggestions`     | `SuggestionItem[]`         | —        | Controlled suggestions; overrides `fields`. |
 | `onContextChange` | `(context) => void`        | —        | Called for query and caret context changes. |
 
-The returned `FieldSearchController` exposes `caret`, `context`, `segments`,
-`items`, `validation`, `activeIndex`, `setActiveIndex`, `setCaret`, `commit`,
-`accept`, `removeSegment`, and `pendingCaretRef`.
+The returned `FieldSearchController` exposes `caret`, `selection`, `context`,
+`segments`, `items`, `validation`, `activeIndex`, `setActiveIndex`, `setCaret`,
+`setSelection`, `commit`, `accept`, `removeSegment`, `undo`, `redo`, and
+`pendingSelectionRef`.
+
+`commit(value, selection, options?)` takes either a caret offset or an
+`{ anchor, focus }` selection. `options.history` is `"push"` (default),
+`"coalesce"` to merge into the previous run of typing, or `"skip"` when applying
+history itself. After a commit, `pendingSelectionRef` holds the selection to
+restore once the render has reached the DOM; read and clear it from a layout
+effect.
+
+The controller is DOM-agnostic — the example above drives it from a native
+`input`. If you are building your own editable field, `field-search/react` also
+exports the offset mapping `SearchInput` uses: `readText`, `readSelection`,
+`applySelection`, `toModelOffset`, `toDomPoint`, and `toModelRange`. They skip
+any subtree marked `data-fs-nontext`.
 
 ## Presentational primitives
 
@@ -426,7 +505,51 @@ Theme the input by setting custom properties on its root or a wrapper:
 }
 ```
 
+Chip geometry is now genuinely adjustable, which it was not while the field was
+a transparent input over a highlight layer:
+
+```css
+.inventory-search {
+  --fs-chip-pad-x: 5px; /* horizontal padding inside a chip */
+  --fs-chip-pad-y: 4px; /* vertical padding inside a chip */
+  --fs-chip-gap: 0px; /* extra margin between chip boxes */
+  --fs-chip-radius: 4px;
+  --fs-close-width: 16px; /* width of the remove control */
+  --fs-close-gap: 2px; /* space reserved between text and control */
+  --fs-close-idle-opacity: 0.45; /* set to 0 for hover-only remove controls */
+}
+```
+
+If you restyle chips yourself, the rule to keep is the positioning one above:
+do not give `.fs-chip` a `position`, or the caret disappears behind it. Anything
+needing a containing block inside a chip belongs on `.fs-close-anchor`.
+
 `layout.css` remains as a compatibility alias for `base.css`.
+
+## Migrating from the overlay input
+
+Before v0.1 the field was a transparent `<input>` layered over a highlight
+layer. It is now a single `contenteditable` element.
+
+| Before                                 | Now                                                            |
+| -------------------------------------- | -------------------------------------------------------------- |
+| ref is an `HTMLInputElement`           | ref is the editable `HTMLDivElement`                           |
+| `.fs-native`, `.fs-layer`              | `.fs-editor`                                                   |
+| `.fs-active-chip`                      | gone; `.fs-chip` is styled in place                            |
+| `data-slot="input"`                    | `data-slot="editor"`                                           |
+| `data-slot="highlight-layer"`          | gone                                                           |
+| `classNames.input`, `classNames.layer` | `classNames.editor` (`input` still applies, deprecated)        |
+| `slots.layer`                          | gone                                                           |
+| `--fs-chip-spread`                     | gone; hover is plain CSS rather than JS hit-testing            |
+| close control placed by JS geometry    | `.fs-close-anchor` gives it a containing block                 |
+| `onChange`, `onSelect`                 | `onValueChange`, `onContextChange`                             |
+| `SearchContext.caret`                  | still present; `SearchContext.selection` adds anchor and focus |
+| `controller.pendingCaretRef`           | `controller.pendingSelectionRef`                               |
+| `input`-only props (`inputMode`, …)    | still accepted; `div` attributes now too                       |
+
+Only one chip carried a remove control at a time, revealed by hover. Every chip
+now has its own, always present, so keyboard traversal and touch removal need no
+emulation. Set `--fs-close-idle-opacity: 0` to keep the hover-only appearance.
 
 ## Development
 

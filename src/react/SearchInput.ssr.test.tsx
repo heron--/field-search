@@ -14,6 +14,11 @@ describe("SearchInput SSR", () => {
     );
 
     expect(html).toContain('role="combobox"');
-    expect(html).toContain('data-slot="highlight-layer"');
+    expect(html).toContain('data-slot="editor"');
+    expect(html).toContain('data-slot="chip"');
+    // `plaintext-only` is applied after mount, so the markup hydrates cleanly
+    // in engines that do not support it. React serializes the attribute name
+    // as written; HTML parses it case-insensitively.
+    expect(html).toContain('contentEditable="true"');
   });
 });

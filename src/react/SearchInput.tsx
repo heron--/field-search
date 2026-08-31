@@ -2,8 +2,21 @@ import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
 import type { ParseError } from "../parser";
 import { Chip, type ChipClassNames } from "./Chip";
+import { DEV } from "./dev";
 import { Suggestions, type SuggestionClassNames } from "./Suggestions";
 import { normalizeOperators, type Segment } from "./segments";
+import {
+  applySelection,
+  ordered,
+  readSelection,
+  readText,
+  stepBack,
+  stepForward,
+  toModelRange,
+  wordBack,
+  wordForward,
+  type EditorSelection,
+} from "./selection";
 import {
   createSearchContext,
   useFieldSearch,
@@ -15,7 +28,9 @@ import {
 export interface SearchInputClassNames {
   root?: string;
   field?: string;
-  layer?: string;
+  /** The editable element. */
+  editor?: string;
+  /** @deprecated Renamed to `editor`. Still applied to the editable element. */
   input?: string;
   chip?: string;
   close?: string;
@@ -29,13 +44,20 @@ export interface SearchInputClassNames {
 export interface SearchInputSlots {
   root?: React.ElementType;
   field?: React.ElementType;
-  layer?: React.ElementType;
   error?: React.ElementType;
 }
 
 export interface SearchInputProps extends Omit<
-  React.InputHTMLAttributes<HTMLInputElement>,
-  "children" | "className" | "defaultValue" | "onChange" | "style" | "value"
+  React.HTMLAttributes<HTMLDivElement>,
+  | "children"
+  | "className"
+  | "contentEditable"
+  | "dangerouslySetInnerHTML"
+  | "defaultValue"
+  | "onChange"
+  | "onSelect"
+  | "style"
+  | "suppressContentEditableWarning"
 > {
   /** Controlled query string. */
   value: string;
@@ -43,6 +65,14 @@ export interface SearchInputProps extends Omit<
   onSearch?: (value: string, context: SearchContext) => void;
   /** Called for caret-only changes too, making async suggestions possible. */
   onContextChange?: (context: SearchContext) => void;
+  /** Muted text shown while the query is empty. */
+  placeholder?: string;
+  /** Mirrored into a hidden input so the query submits with a surrounding form. */
+  name?: string;
+  disabled?: boolean;
+  readOnly?: boolean;
+  /** Sets `aria-required`. A query cannot take part in native validation. */
+  required?: boolean;
   fields?: FieldSuggestion[];
   /** Controlled suggestions. Overrides the built-in `fields` matcher. */
   suggestions?: SuggestionItem[];
@@ -57,13 +87,21 @@ export interface SearchInputProps extends Omit<
     item: SuggestionItem,
     state: { index: number; active: boolean },
   ) => React.ReactNode;
+  /**
+   * Replaces the contents of a chip.
+   *
+   * The chip's text is now the query text the caret moves through, so whatever
+   * this returns must render exactly `segment.text` — decorate it, split it,
+   * re-colour it, but do not add or drop characters. A development-only check
+   * reports drift.
+   */
   renderChip?: (
     segment: Segment,
     state: { index: number; hovered: boolean; invalid: boolean },
   ) => React.ReactNode;
   /** Whether Tab accepts the active suggestion. Defaults to normal Tab behavior. */
   acceptOnTab?: boolean;
-  /** Commit a valid draft when the input loses focus. Defaults to true. */
+  /** Commit a valid draft when the field loses focus. Defaults to true. */
   searchOnBlur?: boolean;
   /** Commit when a valid chip is completed. Defaults to true. */
   searchOnChipComplete?: boolean;
@@ -89,42 +127,30 @@ export interface SearchInputProps extends Omit<
 
 const PAIRS: Record<string, string> = { '"': '"', "(": ")", "[": "]" };
 const CLOSERS: Record<string, true> = { '"': true, ")": true, "]": true };
-const CARET_KEYS = new Set([
-  "ArrowLeft",
-  "ArrowRight",
-  "ArrowUp",
-  "ArrowDown",
-  "Home",
-  "End",
-]);
-const DEFAULT_GEOMETRY = { spread: 3, closeWidth: 16 };
 const useIsomorphicLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;
-
-interface Measured {
-  index: number;
-  inlineStart: number;
-  top: number;
-  height: number;
-}
 
 function join(base: string, extra?: string) {
   return extra ? `${base} ${extra}` : base;
 }
 
-function readGeometry(node: HTMLElement | null) {
-  if (!node) return DEFAULT_GEOMETRY;
-  const style = getComputedStyle(node);
-  const spread = Number.parseFloat(style.getPropertyValue("--fs-chip-spread"));
-  const closeWidth = Number.parseFloat(
-    style.getPropertyValue("--fs-close-width"),
-  );
-  return {
-    spread: Number.isFinite(spread) ? spread : DEFAULT_GEOMETRY.spread,
-    closeWidth: Number.isFinite(closeWidth)
-      ? closeWidth
-      : DEFAULT_GEOMETRY.closeWidth,
-  };
+function classes(...values: (string | undefined)[]) {
+  return values.filter(Boolean).join(" ") || undefined;
+}
+
+/**
+ * `plaintext-only` stops the browser inserting markup of its own. Where it is
+ * unsupported the attribute would fall back to "inherit" and leave the field
+ * uneditable, so it is applied after mount rather than rendered outright.
+ */
+let plaintextOnlySupport: boolean | null = null;
+function supportsPlaintextOnly() {
+  if (plaintextOnlySupport !== null) return plaintextOnlySupport;
+  if (typeof document === "undefined") return false;
+  const probe = document.createElement("div");
+  probe.setAttribute("contenteditable", "plaintext-only");
+  plaintextOnlySupport = probe.contentEditable === "plaintext-only";
+  return plaintextOnlySupport;
 }
 
 function nextEnabledIndex(
@@ -138,6 +164,41 @@ function nextEnabledIndex(
     if (!items[index]?.disabled) return index;
   }
   return -1;
+}
+
+/**
+ * What a delete should remove when the browser did not say.
+ *
+ * Chrome and Safari attach an explicit target range to `beforeinput`, which
+ * already accounts for grapheme clusters and each platform's word rules. This
+ * is the fallback for engines that report a collapsed range instead.
+ */
+function deletionRange(
+  value: string,
+  selection: EditorSelection,
+  inputType: string,
+): EditorSelection {
+  const { start, end } = ordered(selection);
+  if (start !== end) return { anchor: start, focus: end };
+
+  switch (inputType) {
+    case "deleteWordBackward":
+      return { anchor: wordBack(value, start), focus: start };
+    case "deleteWordForward":
+      return { anchor: start, focus: wordForward(value, start) };
+    case "deleteSoftLineBackward":
+    case "deleteHardLineBackward":
+    case "deleteToBeginningOfLine":
+      return { anchor: 0, focus: start };
+    case "deleteSoftLineForward":
+    case "deleteHardLineForward":
+    case "deleteToEndOfLine":
+      return { anchor: start, focus: value.length };
+    case "deleteContentForward":
+      return { anchor: start, focus: stepForward(value, start) };
+    default:
+      return { anchor: stepBack(value, start), focus: start };
+  }
 }
 
 function endsWithNewSeparator(
@@ -184,14 +245,31 @@ function normalizeEditingOperators(value: string, caret: number) {
   );
 }
 
+const CloseIcon = (
+  <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+    <path
+      d="M3.2 3.2 8.8 8.8M8.8 3.2 3.2 8.8"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 /** A styled convenience component built on the headless `useFieldSearch` API. */
-export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
+export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
   function SearchInput(
     {
       value,
       onValueChange,
       onSearch,
       onContextChange,
+      placeholder,
+      name,
+      disabled = false,
+      readOnly = false,
+      required = false,
       fields = [],
       suggestions,
       suggestionsHeader,
@@ -220,35 +298,34 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       portalContainer,
       id: suppliedId,
       dir,
-      disabled,
-      readOnly,
+      tabIndex,
+      spellCheck,
       onFocus,
       onBlur,
       onKeyDown,
       onKeyUp,
       onClick,
-      onSelect,
-      onScroll,
       onPointerDown,
+      onPaste,
+      onCut,
+      onCompositionStart,
+      onCompositionEnd,
       "aria-describedby": ariaDescribedBy,
       "aria-invalid": ariaInvalid,
-      ...inputProps
+      ...editorProps
     },
     forwardedRef,
   ) {
-    const inputRef = React.useRef<HTMLInputElement>(null);
-    const layerRef = React.useRef<HTMLDivElement>(null);
-    const fieldRef = React.useRef<HTMLDivElement>(null);
+    const editorRef = React.useRef<HTMLDivElement | null>(null);
     const rootRef = React.useRef<HTMLDivElement>(null);
-    const closeRef = React.useRef<HTMLButtonElement>(null);
-    const chipRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
-    const pendingRemoveFocusRef = React.useRef(false);
-    const geometry = React.useRef(DEFAULT_GEOMETRY);
-    const [inputFocused, setInputFocused] = React.useState(false);
+    const composingRef = React.useRef(false);
+    const [editorNode, setEditorNode] = React.useState<HTMLDivElement | null>(
+      null,
+    );
+    const [focusedField, setFocusedField] = React.useState(false);
     const [dismissed, setDismissed] = React.useState(false);
     const [hoveredIndex, setHoveredIndex] = React.useState<number | null>(null);
-    const [dismissedByTyping, setDismissedByTyping] = React.useState(false);
-    const [measurements, setMeasurements] = React.useState<Measured[]>([]);
+    const [plaintextOnly, setPlaintextOnly] = React.useState(false);
 
     const controller = useFieldSearch({
       value,
@@ -258,10 +335,11 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       onContextChange,
     });
 
+    const editable = !disabled && !readOnly;
     const generatedId = React.useId().replaceAll(":", "");
-    const inputId = suppliedId ?? `field-search-${generatedId}`;
-    const listboxId = `${inputId}-suggestions`;
-    const errorId = `${inputId}-error`;
+    const editorId = suppliedId ?? `field-search-${generatedId}`;
+    const listboxId = `${editorId}-suggestions`;
+    const errorId = `${editorId}-error`;
     const activeItem = controller.items[controller.activeIndex];
     const activeItemId = activeItem
       ? `${listboxId}-option-${controller.activeIndex}`
@@ -270,180 +348,132 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
     const hasSuggestionContent =
       controller.items.length > 0 || suggestionsLoading || emptyMessage != null;
     const open =
-      inputFocused && !disabled && !dismissed && hasSuggestionContent;
-    const revealErrors = !inputFocused;
+      focusedField && !disabled && !dismissed && hasSuggestionContent;
+    const revealErrors = !focusedField;
     const invalid =
       revealErrors && controller.segments.some((segment) => segment.error);
 
-    const setInputRef = React.useCallback(
-      (node: HTMLInputElement | null) => {
-        inputRef.current = node;
+    const setEditorRef = React.useCallback(
+      (node: HTMLDivElement | null) => {
+        editorRef.current = node;
+        setEditorNode(node);
         if (typeof forwardedRef === "function") forwardedRef(node);
         else if (forwardedRef) forwardedRef.current = node;
       },
       [forwardedRef],
     );
 
-    useIsomorphicLayoutEffect(() => {
-      const position = controller.pendingCaretRef.current;
-      if (position === null) return;
-      controller.pendingCaretRef.current = null;
-      inputRef.current?.setSelectionRange(position, position);
-    });
+    const selectionNow = () =>
+      readSelection(editorRef.current) ?? controller.selection;
 
-    const measureChips = React.useCallback(() => {
-      const field = fieldRef.current;
-      if (!field) return;
-      const bounds = field.getBoundingClientRect();
-      const direction = getComputedStyle(field).direction;
-      const borderInlineEnd =
-        field.offsetWidth - field.clientWidth - field.clientLeft;
-      const next: Measured[] = [];
-
-      for (let index = 0; index < chipRefs.current.length; index++) {
-        const node = chipRefs.current[index];
-        if (!node) continue;
-        const rect = node.getBoundingClientRect();
-        next.push({
-          index,
-          inlineStart:
-            direction === "rtl"
-              ? bounds.right - rect.right - borderInlineEnd
-              : rect.left - bounds.left - field.clientLeft,
-          top: rect.top - bounds.top - field.clientTop,
-          height: rect.height,
-        });
-      }
-      setMeasurements(next);
-    }, []);
-
-    useIsomorphicLayoutEffect(() => {
-      geometry.current = readGeometry(rootRef.current);
-      measureChips();
-      const field = fieldRef.current;
-      if (!field || typeof ResizeObserver === "undefined") return;
-      const observer = new ResizeObserver(measureChips);
-      observer.observe(field);
-      for (const chip of chipRefs.current) if (chip) observer.observe(chip);
-      return () => observer.disconnect();
-    }, [measureChips, value]);
-
-    React.useEffect(() => {
-      setDismissedByTyping(false);
-    }, [hoveredIndex]);
-
-    useIsomorphicLayoutEffect(() => {
-      if (!pendingRemoveFocusRef.current) return;
-      pendingRemoveFocusRef.current = false;
-      closeRef.current?.focus();
-    });
-
-    const focusRemove = (index: number) => {
-      pendingRemoveFocusRef.current = true;
-      setDismissedByTyping(false);
-      setHoveredIndex(index);
+    const syncSelection = () => {
+      const next = readSelection(editorRef.current);
+      if (next) controller.setSelection(next);
     };
 
-    const syncCaret = React.useCallback(() => {
-      controller.setCaret(inputRef.current?.selectionStart ?? 0);
-    }, [controller]);
+    /* ---------------------------------------------------------------- */
+    /* Editing                                                          */
+    /* ---------------------------------------------------------------- */
 
-    const handleMouseMove = (event: React.MouseEvent) => {
-      const field = fieldRef.current;
-      if (!field) return;
-      const direction = getComputedStyle(field).direction;
-      const { clientX, clientY } = event;
-      const { spread, closeWidth } = geometry.current;
+    const applyEdit = (
+      range: EditorSelection,
+      insert: string,
+      options?: { coalesce?: boolean },
+    ) => {
+      if (!editable) return null;
+      const { start, end } = ordered(range);
+      // The query is a single line, so anything multi-line becomes spaces.
+      const text = insert.replace(/[\r\n\t]+/g, " ");
+      if (start === end && text === "") return null;
 
-      for (let index = 0; index < chipRefs.current.length; index++) {
-        const node = chipRefs.current[index];
-        if (!node) continue;
-        const rect = node.getBoundingClientRect();
-        const start =
-          direction === "rtl"
-            ? rect.left - spread - closeWidth
-            : rect.left - spread;
-        const end =
-          direction === "rtl"
-            ? rect.right + spread
-            : rect.right + spread + closeWidth;
-        if (
-          clientX >= start &&
-          clientX <= end &&
-          clientY >= rect.top - spread &&
-          clientY <= rect.bottom + spread
-        ) {
-          setHoveredIndex(index);
-          return;
-        }
-      }
-      setHoveredIndex(null);
-    };
-
-    const handlePointerDown = (event: React.PointerEvent<HTMLInputElement>) => {
-      if (event.pointerType !== "mouse") {
-        const { clientX, clientY } = event;
-        const { spread } = geometry.current;
-        const touchedIndex = chipRefs.current.findIndex((node) => {
-          if (!node) return false;
-          const rect = node.getBoundingClientRect();
-          return (
-            clientX >= rect.left - spread &&
-            clientX <= rect.right + spread &&
-            clientY >= rect.top - spread &&
-            clientY <= rect.bottom + spread
-          );
-        });
-        setHoveredIndex(touchedIndex >= 0 ? touchedIndex : null);
-      }
-      onPointerDown?.(event);
-    };
-
-    const syncScroll = (event: React.UIEvent<HTMLInputElement>) => {
-      const layer = layerRef.current;
-      if (layer) layer.scrollLeft = event.currentTarget.scrollLeft;
-      measureChips();
-      onScroll?.(event);
-    };
-
-    const choose = (item: SuggestionItem, index: number) => {
-      if (readOnly || disabled) return;
-      const target = controller.context.target;
-      const head = value.slice(0, target.replaceFrom);
-      const tail = value.slice(controller.caret);
-      const acceptedValue = `${head}${item.insert}${tail}`;
-      const acceptedCaret = target.replaceFrom + item.insert.length;
-      const completesFinalValue =
-        item.insert.length > 0 &&
-        !/\s$/.test(item.insert) &&
-        tail.length === 0 &&
-        createSearchContext(acceptedValue, acceptedCaret).valid;
-      const acceptedItem = completesFinalValue
-        ? { ...item, insert: `${item.insert} ` }
-        : item;
-      const mutation = controller.accept(acceptedItem);
+      const caret = start + text.length;
+      const nextValue = normalizeEditingOperators(
+        value.slice(0, start) + text + value.slice(end),
+        caret,
+      );
       setDismissed(false);
-      onSuggestionSelect?.(item, index);
-      if (searchOnChipComplete && mutation?.context.valid) {
+      const mutation = controller.commit(nextValue, caret, {
+        history: options?.coalesce ? "coalesce" : "push",
+      });
+      if (
+        searchOnChipComplete &&
+        mutation.context.valid &&
+        endsWithNewSeparator(value, nextValue, caret, mutation.context)
+      ) {
         onSearch?.(mutation.value, mutation.context);
       }
+      return mutation;
     };
 
-    const remove = (segment: Segment, index: number) => {
-      if (readOnly || disabled) return;
-      const mutation = controller.removeSegment(index);
-      setHoveredIndex(null);
-      onSegmentRemove?.(segment, index);
-      if (searchOnRemove && mutation?.context.valid) {
-        onSearch?.(mutation.value, mutation.context);
+    /**
+     * Every edit is intercepted and replayed against the model, so the browser
+     * never mutates the field itself and React stays the only writer. The one
+     * exception is composition, which cannot be cancelled; the model catches up
+     * on `compositionend`.
+     */
+    const handleBeforeInput = (event: InputEvent) => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      if (!editable) {
+        event.preventDefault();
+        return;
       }
-      inputRef.current?.focus();
+      const type = event.inputType;
+      if (
+        composingRef.current ||
+        event.isComposing ||
+        type.startsWith("insertCompositionText")
+      ) {
+        return;
+      }
+
+      if (type === "historyUndo") {
+        event.preventDefault();
+        setDismissed(false);
+        controller.undo();
+        return;
+      }
+      if (type === "historyRedo") {
+        event.preventDefault();
+        setDismissed(false);
+        controller.redo();
+        return;
+      }
+
+      const ranges =
+        typeof event.getTargetRanges === "function"
+          ? event.getTargetRanges()
+          : [];
+      const supplied = ranges[0];
+      const at = supplied
+        ? toModelRange(editor, supplied)
+        : (readSelection(editor) ?? controller.selection);
+
+      if (type.startsWith("delete")) {
+        event.preventDefault();
+        applyEdit(deletionRange(value, at, type), "");
+        return;
+      }
+
+      if (type === "insertText" || type === "insertReplacementText") {
+        event.preventDefault();
+        const text =
+          event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
+        applyEdit(at, text, {
+          coalesce: text.length === 1 && !/\s/.test(text),
+        });
+        return;
+      }
+
+      // Line breaks, rich paste, drops and formatting mean nothing in a
+      // single-line query. Paste and cut arrive through their own clipboard
+      // events, which carry data more reliably than `dataTransfer` does here.
+      event.preventDefault();
     };
 
-    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
       onKeyDown?.(event);
       if (event.defaultPrevented || event.nativeEvent.isComposing) return;
-      if (CARET_KEYS.has(event.key)) setDismissedByTyping(true);
 
       if (open && event.key === "ArrowDown") {
         event.preventDefault();
@@ -474,26 +504,27 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
         setDismissed(true);
         return;
       }
-      if (
-        event.key === "Tab" &&
-        !event.shiftKey &&
-        !readOnly &&
-        !disabled &&
-        measurements[0]
-      ) {
-        event.preventDefault();
-        focusRemove(measurements[0].index);
-        return;
-      }
       if (event.key === "Enter") {
         event.preventDefault();
         if (controller.context.valid) onSearch?.(value, controller.context);
         return;
       }
-      if (readOnly || disabled) return;
+      if (!editable) return;
 
-      const start = event.currentTarget.selectionStart ?? 0;
-      const end = event.currentTarget.selectionEnd ?? start;
+      // The browser's own undo stack only holds edits the browser performed,
+      // and it performs none, so history is driven from here.
+      const modified = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (modified && !event.altKey && (key === "z" || key === "y")) {
+        event.preventDefault();
+        setDismissed(false);
+        if (key === "y" || event.shiftKey) controller.redo();
+        else controller.undo();
+        return;
+      }
+      if (modified) return;
+
+      const { start, end } = ordered(selectionNow());
       if (CLOSERS[event.key] && start === end && value[start] === event.key) {
         event.preventDefault();
         const mutation = controller.commit(value, start + 1);
@@ -505,49 +536,130 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
       const closer = PAIRS[event.key];
       if (closer && start === end) {
         event.preventDefault();
-        controller.commit(
-          `${value.slice(0, start)}${event.key}${closer}${value.slice(start)}`,
-          start + 1,
-        );
+        const raw = `${value.slice(0, start)}${event.key}${closer}${value.slice(end)}`;
+        controller.commit(normalizeEditingOperators(raw, start + 1), start + 1);
       }
     };
 
-    const handleRemoveKeyDown = (
-      event: React.KeyboardEvent<HTMLButtonElement>,
-      measurement: Measured,
-    ) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setHoveredIndex(null);
-        inputRef.current?.focus();
-        return;
+    const choose = (item: SuggestionItem, index: number) => {
+      if (!editable) return;
+      const target = controller.context.target;
+      const { end } = ordered(controller.selection);
+      const head = value.slice(0, target.replaceFrom);
+      const tail = value.slice(Math.max(end, target.replaceFrom));
+      const acceptedValue = `${head}${item.insert}${tail}`;
+      const acceptedCaret = target.replaceFrom + item.insert.length;
+      const completesFinalValue =
+        item.insert.length > 0 &&
+        !/\s$/.test(item.insert) &&
+        tail.length === 0 &&
+        createSearchContext(acceptedValue, acceptedCaret).valid;
+      const acceptedItem = completesFinalValue
+        ? { ...item, insert: `${item.insert} ` }
+        : item;
+      const mutation = controller.accept(acceptedItem);
+      setDismissed(false);
+      onSuggestionSelect?.(item, index);
+      if (searchOnChipComplete && mutation?.context.valid) {
+        onSearch?.(mutation.value, mutation.context);
       }
-      if (event.key !== "Tab") return;
+    };
 
-      const position = measurements.findIndex(
-        (current) => current.index === measurement.index,
+    const remove = (segment: Segment, index: number) => {
+      if (!editable) return;
+      const mutation = controller.removeSegment(index);
+      setHoveredIndex(null);
+      onSegmentRemove?.(segment, index);
+      if (searchOnRemove && mutation?.context.valid) {
+        onSearch?.(mutation.value, mutation.context);
+      }
+      editorRef.current?.focus();
+    };
+
+    /* ---------------------------------------------------------------- */
+    /* DOM wiring                                                       */
+    /* ---------------------------------------------------------------- */
+
+    const beforeInputRef = React.useRef(handleBeforeInput);
+    useIsomorphicLayoutEffect(() => {
+      beforeInputRef.current = handleBeforeInput;
+    });
+
+    // React's `onBeforeInput` is not the native event and carries no
+    // `inputType` or target ranges, so the real one is bound by hand.
+    React.useEffect(() => {
+      if (!editorNode) return;
+      const listener = (event: Event) =>
+        beforeInputRef.current(event as InputEvent);
+      editorNode.addEventListener("beforeinput", listener);
+      return () => editorNode.removeEventListener("beforeinput", listener);
+    }, [editorNode]);
+
+    React.useEffect(() => {
+      setPlaintextOnly(supportsPlaintextOnly());
+    }, []);
+
+    // Kept in step with the model so the listener below can recognise its own
+    // writes without needing to be re-subscribed on every render.
+    const selectionRef = React.useRef(controller.selection);
+    useIsomorphicLayoutEffect(() => {
+      selectionRef.current = controller.selection;
+    });
+
+    const setSelection = controller.setSelection;
+    React.useEffect(() => {
+      if (!editorNode) return;
+      const document = editorNode.ownerDocument;
+      const sync = () => {
+        if (document.activeElement !== editorNode) return;
+        if (composingRef.current) return;
+        const next = readSelection(editorNode);
+        if (!next) return;
+        // Writing the selection ourselves fires this event too. A reading that
+        // already matches the model is that echo, and acting on it would set
+        // state, re-render, write the selection again, and never settle.
+        const current = selectionRef.current;
+        if (next.anchor === current.anchor && next.focus === current.focus) {
+          return;
+        }
+        setSelection(next);
+      };
+      document.addEventListener("selectionchange", sync);
+      return () => document.removeEventListener("selectionchange", sync);
+    }, [editorNode, setSelection]);
+
+    useIsomorphicLayoutEffect(() => {
+      const pending = controller.pendingSelectionRef.current;
+      if (pending === null) return;
+      controller.pendingSelectionRef.current = null;
+      const editor = editorRef.current;
+      if (!editor) return;
+      // Never pull the caret into a field nobody is editing.
+      const active = editor.ownerDocument.activeElement;
+      if (active !== editor && !editor.contains(active)) return;
+      applySelection(editor, pending);
+    });
+
+    // The whole design rests on the rendered text being the query text.
+    useIsomorphicLayoutEffect(() => {
+      if (!DEV) return;
+      const editor = editorRef.current;
+      if (!editor || composingRef.current) return;
+      const rendered = readText(editor);
+      if (rendered === value) return;
+      console.error(
+        "field-search: the editable field renders %o but the query is %o. " +
+          "Chip content must concatenate back to the segment text — check `renderChip`.",
+        rendered,
+        value,
       );
-      const next = measurements[position + (event.shiftKey ? -1 : 1)];
-      if (next) {
-        event.preventDefault();
-        focusRemove(next.index);
-      } else if (event.shiftKey) {
-        event.preventDefault();
-        setHoveredIndex(null);
-        inputRef.current?.focus();
-      }
-    };
+    });
+
+    /* ---------------------------------------------------------------- */
 
     const Root = slots.root ?? "div";
     const Field = slots.field ?? "div";
-    const Layer = slots.layer ?? "div";
     const ErrorSlot = slots.error ?? "div";
-    const activeMeasurement = measurements.find(
-      (measurement) => measurement.index === hoveredIndex,
-    );
-    const activeSegment = activeMeasurement
-      ? controller.segments[activeMeasurement.index]
-      : undefined;
     const header =
       typeof suggestionsHeader === "function"
         ? suggestionsHeader(controller.context)
@@ -574,9 +686,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
         ref={rootRef}
         className={join(
           "fs-root",
-          [className, classNames.root, rootProps?.className]
-            .filter(Boolean)
-            .join(" ") || undefined,
+          classes(className, classNames.root, rootProps?.className),
         )}
         style={{ ...rootProps?.style, ...style }}
         dir={rootProps?.dir ?? dir}
@@ -590,139 +700,64 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
         >
           <Popover.Anchor asChild>
             <Field
-              ref={fieldRef}
               className={join("fs-field", classNames.field)}
               data-slot="field"
               data-invalid={invalid || undefined}
               data-disabled={disabled || undefined}
-              onMouseEnter={() => {
-                geometry.current = readGeometry(rootRef.current);
-                measureChips();
-              }}
-              onMouseMove={handleMouseMove}
-              onMouseLeave={() => setHoveredIndex(null)}
             >
-              <Layer
-                ref={layerRef}
-                className={join("fs-layer", classNames.layer)}
-                data-slot="highlight-layer"
-                aria-hidden="true"
-              >
-                {controller.segments.map((segment, index) => {
-                  if (segment.kind === "chip") {
-                    const hovered = hoveredIndex === index;
-                    const overlayShowing = hovered && !dismissedByTyping;
-                    return (
-                      <Chip
-                        key={`${segment.start}-${segment.text}`}
-                        ref={(node) => {
-                          chipRefs.current[index] = node;
-                        }}
-                        segment={segment}
-                        hovered={hovered}
-                        showError={revealErrors}
-                        className={classNames.chip}
-                        classNames={chipClassNames}
-                        style={{
-                          visibility: overlayShowing ? "hidden" : undefined,
-                        }}
-                      >
-                        {renderChip?.(segment, {
-                          index,
-                          hovered,
-                          invalid: Boolean(revealErrors && segment.error),
-                        })}
-                      </Chip>
-                    );
-                  }
-                  chipRefs.current[index] = null;
-                  const segmentClassName =
-                    segment.kind === "operator"
-                      ? join("fs-operator", classNames.operator)
-                      : segment.kind === "paren"
-                        ? join("fs-top-paren", classNames.paren)
-                        : undefined;
-                  return (
-                    <span
-                      key={`${segment.start}-${segment.kind}`}
-                      className={segmentClassName}
-                      data-slot={segment.kind}
-                    >
-                      {segment.text}
-                    </span>
-                  );
-                })}
-              </Layer>
-
-              <input
-                {...inputProps}
-                ref={setInputRef}
-                id={inputId}
-                dir={dir}
-                className={join("fs-native", classNames.input)}
-                data-slot="input"
-                type="text"
-                spellCheck={inputProps.spellCheck ?? false}
-                autoComplete={inputProps.autoComplete ?? "off"}
-                disabled={disabled}
-                readOnly={readOnly}
-                value={value}
+              <div
+                {...editorProps}
+                ref={setEditorRef}
+                id={editorId}
+                className={join(
+                  "fs-editor",
+                  classes(classNames.editor, classNames.input),
+                )}
+                data-slot="editor"
+                contentEditable={
+                  editable
+                    ? plaintextOnly
+                      ? "plaintext-only"
+                      : true
+                    : undefined
+                }
+                suppressContentEditableWarning
                 role="combobox"
                 aria-autocomplete="list"
                 aria-haspopup="listbox"
                 aria-expanded={open}
+                aria-multiline={false}
                 aria-controls={open ? listboxId : undefined}
                 aria-activedescendant={open ? activeItemId : undefined}
                 aria-invalid={ariaInvalid ?? (invalid || undefined)}
                 aria-describedby={describedBy || undefined}
-                onChange={(event) => {
-                  const rawValue = event.currentTarget.value;
-                  const position =
-                    event.currentTarget.selectionStart ?? rawValue.length;
-                  const nextValue = normalizeEditingOperators(
-                    rawValue,
-                    position,
-                  );
-                  setDismissed(false);
-                  setDismissedByTyping(true);
-                  const mutation = controller.commit(nextValue, position);
-                  if (
-                    searchOnChipComplete &&
-                    mutation.context.valid &&
-                    endsWithNewSeparator(
-                      value,
-                      nextValue,
-                      position,
-                      mutation.context,
-                    )
-                  ) {
-                    onSearch?.(mutation.value, mutation.context);
-                  }
-                }}
-                onPointerDown={handlePointerDown}
+                aria-disabled={disabled || undefined}
+                aria-readonly={readOnly || undefined}
+                aria-required={required || undefined}
+                data-placeholder={placeholder}
+                data-empty={value === "" || undefined}
+                dir={dir}
+                spellCheck={spellCheck ?? false}
+                tabIndex={disabled ? -1 : (tabIndex ?? 0)}
                 onKeyDown={handleKeyDown}
                 onKeyUp={(event) => {
-                  syncCaret();
+                  syncSelection();
                   onKeyUp?.(event);
                 }}
                 onClick={(event) => {
                   setDismissed(false);
-                  syncCaret();
+                  syncSelection();
                   onClick?.(event);
                 }}
-                onSelect={(event) => {
-                  syncCaret();
-                  onSelect?.(event);
-                }}
-                onScroll={syncScroll}
+                onPointerDown={onPointerDown}
                 onFocus={(event) => {
-                  setInputFocused(true);
+                  setFocusedField(true);
                   setDismissed(false);
-                  syncCaret();
+                  syncSelection();
                   onFocus?.(event);
                 }}
                 onBlur={(event) => {
-                  setInputFocused(false);
+                  setFocusedField(false);
                   const nextFocus = event.relatedTarget;
                   const leftComponent =
                     !(nextFocus instanceof Node) ||
@@ -736,59 +771,116 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
                   }
                   onBlur?.(event);
                 }}
-              />
-
-              {activeMeasurement &&
-                activeSegment?.kind === "chip" &&
-                !dismissedByTyping &&
-                (() => {
-                  const invalid = Boolean(revealErrors && activeSegment.error);
-                  return (
-                    <Chip
-                      segment={activeSegment}
-                      hovered
-                      showError={revealErrors}
-                      className={classNames.chip}
-                      classNames={chipClassNames}
-                      style={
-                        {
-                          "--fs-active-chip-inline-start": `${activeMeasurement.inlineStart}px`,
-                          "--fs-active-chip-top": `${activeMeasurement.top}px`,
-                          "--fs-active-chip-height": `${activeMeasurement.height}px`,
-                        } as React.CSSProperties
-                      }
-                      end={
-                        <button
-                          ref={closeRef}
-                          type="button"
-                          className={join("fs-close", classNames.close)}
-                          data-slot="remove"
-                          disabled={disabled || readOnly}
-                          aria-label={`Remove ${activeSegment.text}`}
-                          onFocus={() =>
-                            setHoveredIndex(activeMeasurement.index)
-                          }
-                          onBlur={() => setHoveredIndex(null)}
-                          onKeyDown={(event) =>
-                            handleRemoveKeyDown(event, activeMeasurement)
-                          }
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() =>
-                            remove(activeSegment, activeMeasurement.index)
-                          }
-                        >
-                          <span aria-hidden="true">×</span>
-                        </button>
-                      }
-                    >
-                      {renderChip?.(activeSegment, {
-                        index: activeMeasurement.index,
-                        hovered: true,
-                        invalid,
-                      })}
-                    </Chip>
+                onCompositionStart={(event) => {
+                  composingRef.current = true;
+                  onCompositionStart?.(event);
+                }}
+                onCompositionEnd={(event) => {
+                  composingRef.current = false;
+                  const editor = editorRef.current;
+                  if (editor && editable) {
+                    const composed = readText(editor);
+                    const at = readSelection(editor) ?? controller.selection;
+                    if (composed === value) {
+                      controller.setSelection(at);
+                    } else {
+                      setDismissed(false);
+                      controller.commit(
+                        normalizeEditingOperators(composed, at.focus),
+                        at,
+                      );
+                    }
+                  }
+                  onCompositionEnd?.(event);
+                }}
+                onPaste={(event) => {
+                  onPaste?.(event);
+                  if (event.defaultPrevented || !editable) return;
+                  event.preventDefault();
+                  const text = event.clipboardData?.getData("text/plain") ?? "";
+                  applyEdit(selectionNow(), text);
+                }}
+                onCut={(event) => {
+                  onCut?.(event);
+                  if (event.defaultPrevented || !editable) return;
+                  event.preventDefault();
+                  const { start, end } = ordered(selectionNow());
+                  if (start === end) return;
+                  event.clipboardData?.setData(
+                    "text/plain",
+                    value.slice(start, end),
                   );
-                })()}
+                  applyEdit({ anchor: start, focus: end }, "");
+                }}
+              >
+                {controller.segments.map((segment, index) => {
+                  if (segment.kind === "chip") {
+                    const hovered = hoveredIndex === index;
+                    return (
+                      <Chip
+                        key={`${index}-chip`}
+                        segment={segment}
+                        hovered={hovered}
+                        showError={revealErrors}
+                        className={classNames.chip}
+                        classNames={chipClassNames}
+                        onMouseEnter={() => setHoveredIndex(index)}
+                        onMouseLeave={() =>
+                          setHoveredIndex((current) =>
+                            current === index ? null : current,
+                          )
+                        }
+                        end={
+                          editable ? (
+                            <button
+                              type="button"
+                              className={join("fs-close", classNames.close)}
+                              data-slot="remove"
+                              contentEditable={false}
+                              aria-label={`Remove ${segment.text}`}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Escape") return;
+                                event.preventDefault();
+                                editorRef.current?.focus();
+                              }}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => remove(segment, index)}
+                            >
+                              {CloseIcon}
+                            </button>
+                          ) : undefined
+                        }
+                      >
+                        {renderChip?.(segment, {
+                          index,
+                          hovered,
+                          invalid: Boolean(revealErrors && segment.error),
+                        })}
+                      </Chip>
+                    );
+                  }
+
+                  const segmentClassName =
+                    segment.kind === "operator"
+                      ? join("fs-operator", classNames.operator)
+                      : segment.kind === "paren"
+                        ? join("fs-top-paren", classNames.paren)
+                        : undefined;
+                  return (
+                    <span
+                      key={`${index}-${segment.kind}`}
+                      className={segmentClassName}
+                      data-slot={segment.kind}
+                    >
+                      {segment.text}
+                    </span>
+                  );
+                })}
+              </div>
+
+              {name !== undefined && (
+                <input type="hidden" name={name} value={value} />
+              )}
             </Field>
           </Popover.Anchor>
 
@@ -834,9 +926,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
             id={errorId}
             className={join(
               "fs-error",
-              [classNames.error, errorProps?.className]
-                .filter(Boolean)
-                .join(" ") || undefined,
+              classes(classNames.error, errorProps?.className),
             )}
             data-slot="error"
             role="alert"
@@ -851,6 +941,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
 );
 
 export type {
+  EditorSelection,
   FieldSuggestion,
   SearchContext,
   SuggestionItem,
