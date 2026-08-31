@@ -1,9 +1,28 @@
 {
   "name": "field-search",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": false,
   "description": "Fielded search query language: string <-> AST, plus React rendering primitives.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heron--/field-search.git"
+  },
+  "homepage": "https://heron--.github.io/field-search/",
+  "bugs": "https://github.com/heron--/field-search/issues",
+  "keywords": [
+    "search",
+    "query",
+    "query-language",
+    "parser",
+    "ast",
+    "filter",
+    "faceted-search",
+    "search-input",
+    "combobox",
+    "contenteditable",
+    "react"
+  ],
   "type": "module",
   "sideEffects": [
     "**/*.css"
