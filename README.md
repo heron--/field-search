@@ -1,6 +1,6 @@
 # field-search
 
-A small fielded-query language with parsing, stringifying, tolerant editing
+A small fielded-query language with parsing, formatting, tolerant editing
 segments, and reusable React search-input primitives.
 
 `field-search` handles the query language and editing experience. Your
@@ -93,12 +93,12 @@ expressions are preserved as adjacent AST children so your application can
 choose their meaning. Quote or backslash-escape spaces and structural
 characters when they are literal content.
 
-## Parse and stringify
+## Parse and format
 
 Use the framework-independent entry point when you only need the language:
 
 ```ts
-import { parse, stringify } from "field-search";
+import { parse, format } from "field-search";
 
 const ast = parse("kind:fruit colors:(red OR green) price:<=5");
 
@@ -106,21 +106,21 @@ if (ast.children[0]?.type === "Filter") {
   console.log(ast.children[0].field); // "kind"
 }
 
-stringify(ast); // reproduces the original query
+format(ast); // reproduces the original query
 ```
 
 `parse` throws a `ParseError` for malformed or empty input. The React APIs use
 tolerant editing state instead, because an in-progress query such as `kind:`
 must remain editable.
 
-You can also construct a typed AST and stringify it:
+You can also construct a typed AST and format it:
 
 ```ts
-import { exact, filter, query, stringify, term } from "field-search";
+import { exact, filter, query, format, term } from "field-search";
 
 const ast = query([filter("kind", term(exact("fruit")))]);
 
-stringify(ast); // "kind:fruit"
+format(ast); // "kind:fruit"
 ```
 
 ## Drafts and searches

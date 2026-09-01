@@ -7,7 +7,7 @@ import {
   type SuggestionItem,
 } from "../src/react";
 import { parse } from "../src/parser";
-import { stringify } from "../src/stringify";
+import { format } from "../src/format";
 import { PRODUCE, type Produce } from "./data";
 import { filterRecords } from "./evaluate";
 import "../src/react/styles.css";
@@ -217,7 +217,7 @@ export default function App() {
   const roundTrip = React.useMemo(() => {
     if (query.trim() === "") return "";
     try {
-      return stringify(parse(query));
+      return format(parse(query));
     } catch (e) {
       return (e as Error).message;
     }

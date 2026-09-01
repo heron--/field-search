@@ -44,7 +44,7 @@ pragma, because most of the library needs no DOM at all:
 | File                                 | Covers                                      |
 | ------------------------------------ | ------------------------------------------- |
 | `src/parser.test.ts`                 | String to AST, and every parse error        |
-| `src/stringify.test.ts`              | AST back to string, and round trips         |
+| `src/format.test.ts`                 | AST back to string, and round trips         |
 | `src/react/segments.test.ts`         | Tolerant segmentation and caret targets     |
 | `src/react/selection.test.ts`        | Model offset ↔ DOM position mapping         |
 | `src/react/history.test.ts`          | Undo stack and coalescing rules             |
