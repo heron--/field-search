@@ -10,5 +10,11 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}", "playground/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.test.{ts,tsx}"],
+    },
   },
 });
