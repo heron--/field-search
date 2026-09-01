@@ -14,7 +14,7 @@ export default defineConfig({
   // is structural, `theme.css` is optional, and `styles.css` imports both.
   async onSuccess() {
     await mkdir("dist", { recursive: true });
-    for (const file of ["base.css", "layout.css", "theme.css", "styles.css"]) {
+    for (const file of ["base.css", "theme.css", "styles.css"]) {
       await copyFile(`src/react/${file}`, `dist/${file}`);
     }
   },
