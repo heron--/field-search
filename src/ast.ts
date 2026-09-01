@@ -20,7 +20,7 @@
  *
  * Round-tripping is a hard requirement: nodes keep enough of the original
  * lexeme (`raw`, `quoted`, and a `GroupNode` for every paren pair) that
- * `stringify(parse(s))` reproduces `s`.
+ * `format(parse(s))` reproduces `s`.
  */
 
 /* ------------------------------------------------------------------ */
@@ -31,7 +31,7 @@ export interface StringNode {
   type: "String";
   /** Unescaped value. Any `SPECIAL_CHARACTERS` here are literal. */
   value: string;
-  /** `true` for `"quoted values"`, preserved on stringify. */
+  /** `true` for `"quoted values"`, preserved on format. */
   quoted: boolean;
 }
 
@@ -188,7 +188,7 @@ export type AnyNode = QueryNode | QueryExpr | ValueExpr | ScalarNode;
  * unquoted. `@` and `-` are special only at the start of a scalar — `a@b` and
  * `a-b` need no escaping, `@home` and `-foo` do.
  *
- * Inside quotes only `"` and `\` strictly require escaping, but `stringify`
+ * Inside quotes only `"` and `\` strictly require escaping, but `format`
  * escapes `*` regardless so an exact value never re-parses as a wildcard.
  */
 export const SPECIAL_CHARACTERS = [
@@ -215,7 +215,7 @@ export const DATETIME_PREFIX = "@";
 
 /**
  * Exact string match. Any `SPECIAL_CHARACTERS` in `value` are literal content
- * and get escaped on stringify — notably `*`, so an exact value never
+ * and get escaped on format — notably `*`, so an exact value never
  * degrades into a wildcard.
  */
 export function exact(value: string, quoted = false): StringNode {

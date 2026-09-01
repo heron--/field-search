@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 const requiredCore = require("field-search");
 const requiredReact = require("field-search/react");
 assert.equal(typeof requiredCore.parse, "function");
-assert.equal(typeof requiredCore.stringify, "function");
+assert.equal(typeof requiredCore.format, "function");
 assert.equal(typeof requiredReact.SearchInput, "object");
 assert.equal(typeof requiredReact.useFieldSearch, "function");
 
@@ -42,7 +42,7 @@ for (const file of [
 const core = await import("../dist/index.js");
 const react = await import("../dist/react/index.js");
 assert.equal(typeof core.parse, "function");
-assert.equal(typeof core.stringify, "function");
+assert.equal(typeof core.format, "function");
 assert.equal(typeof react.SearchInput, "object");
 assert.equal(typeof react.useFieldSearch, "function");
 

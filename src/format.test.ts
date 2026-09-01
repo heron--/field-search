@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "./parser";
-import { stringify } from "./stringify";
+import { format } from "./format";
 import * as ast from "./ast";
 
 /** Shorthand: a root wrapping one expression. */
@@ -12,36 +12,34 @@ const q = (child: ast.QueryExpr) => ast.query([child]);
 
 describe("scalars", () => {
   it("renders a bare string", () => {
-    expect(stringify(q(ast.term(ast.exact("apple"))))).toBe("apple");
+    expect(format(q(ast.term(ast.exact("apple"))))).toBe("apple");
   });
 
   it("renders a quoted string", () => {
-    expect(stringify(q(ast.term(ast.exact("apple", true))))).toBe('"apple"');
+    expect(format(q(ast.term(ast.exact("apple", true))))).toBe('"apple"');
   });
 
   it("renders a number from its raw lexeme", () => {
-    expect(stringify(q(ast.term(ast.number(1, "1.0"))))).toBe("1.0");
-    expect(stringify(q(ast.term(ast.number(1, "1"))))).toBe("1");
+    expect(format(q(ast.term(ast.number(1, "1.0"))))).toBe("1.0");
+    expect(format(q(ast.term(ast.number(1, "1"))))).toBe("1");
   });
 
   it("renders a negative number", () => {
-    expect(stringify(q(ast.term(ast.number(-5, "-5"))))).toBe("-5");
+    expect(format(q(ast.term(ast.number(-5, "-5"))))).toBe("-5");
   });
 
   it("renders a datetime with its marker", () => {
     expect(
-      stringify(
-        q(ast.term(ast.dateTime(Date.parse("2024-01-15"), "2024-01-15"))),
-      ),
+      format(q(ast.term(ast.dateTime(Date.parse("2024-01-15"), "2024-01-15")))),
     ).toBe("@2024-01-15");
   });
 
   it("renders a wildcard pattern verbatim", () => {
-    expect(stringify(q(ast.term(ast.wildcard("*err*"))))).toBe("*err*");
+    expect(format(q(ast.term(ast.wildcard("*err*"))))).toBe("*err*");
   });
 
   it("renders a quoted wildcard", () => {
-    expect(stringify(q(ast.term(ast.wildcard("dragon *", true))))).toBe(
+    expect(format(q(ast.term(ast.wildcard("dragon *", true))))).toBe(
       '"dragon *"',
     );
   });
@@ -52,9 +50,8 @@ describe("scalars", () => {
 /* ------------------------------------------------------------------ */
 
 describe("escaping", () => {
-  const bare = (value: string) => stringify(q(ast.term(ast.exact(value))));
-  const quoted = (value: string) =>
-    stringify(q(ast.term(ast.exact(value, true))));
+  const bare = (value: string) => format(q(ast.term(ast.exact(value))));
+  const quoted = (value: string) => format(q(ast.term(ast.exact(value, true))));
 
   it("escapes a star so an exact value never becomes a wildcard", () => {
     expect(bare("app*le")).toBe("app\\*le");
@@ -115,19 +112,19 @@ describe("escaping", () => {
   });
 
   it("escapes structural characters in a field name", () => {
-    expect(stringify(q(ast.filter("a b", ast.term(ast.exact("x")))))).toBe(
+    expect(format(q(ast.filter("a b", ast.term(ast.exact("x")))))).toBe(
       "a\\ b:x",
     );
   });
 
   it("masks a keyword field name", () => {
-    expect(stringify(q(ast.filter("AND", ast.term(ast.exact("x")))))).toBe(
+    expect(format(q(ast.filter("AND", ast.term(ast.exact("x")))))).toBe(
       "\\AND:x",
     );
   });
 
   it("leaves a numeric field name bare", () => {
-    expect(stringify(q(ast.filter("5", ast.term(ast.exact("x")))))).toBe("5:x");
+    expect(format(q(ast.filter("5", ast.term(ast.exact("x")))))).toBe("5:x");
   });
 });
 
@@ -140,35 +137,33 @@ describe("structure", () => {
   const red = ast.filter("color", ast.term(ast.exact("red")));
 
   it("joins root children with a space", () => {
-    expect(stringify(ast.query([apple, red]))).toBe("fruit:apple color:red");
+    expect(format(ast.query([apple, red]))).toBe("fruit:apple color:red");
   });
 
   it("renders AND", () => {
-    expect(stringify(q(ast.and([apple, red])))).toBe(
-      "fruit:apple AND color:red",
-    );
+    expect(format(q(ast.and([apple, red])))).toBe("fruit:apple AND color:red");
   });
 
   it("renders OR", () => {
-    expect(stringify(q(ast.or([apple, red])))).toBe("fruit:apple OR color:red");
+    expect(format(q(ast.or([apple, red])))).toBe("fruit:apple OR color:red");
   });
 
   it("renders negation", () => {
-    expect(stringify(q(ast.not(apple)))).toBe("-fruit:apple");
+    expect(format(q(ast.not(apple)))).toBe("-fruit:apple");
   });
 
   it("delimits a negated operand that starts with a digit", () => {
     // `-5` would lex back as a negative number, not a negation.
-    expect(stringify(q(ast.not(ast.term(ast.number(5)))))).toBe("-(5)");
-    expect(
-      stringify(q(ast.not(ast.filter("5", ast.term(ast.exact("x")))))),
-    ).toBe("-(5:x)");
-    expect(stringify(q(ast.not(ast.term(ast.exact("5abc")))))).toBe("-(5abc)");
+    expect(format(q(ast.not(ast.term(ast.number(5)))))).toBe("-(5)");
+    expect(format(q(ast.not(ast.filter("5", ast.term(ast.exact("x"))))))).toBe(
+      "-(5:x)",
+    );
+    expect(format(q(ast.not(ast.term(ast.exact("5abc")))))).toBe("-(5abc)");
   });
 
   it("delimits a negated value that starts with a digit", () => {
     expect(
-      stringify(
+      format(
         q(
           ast.filter(
             "k",
@@ -180,41 +175,37 @@ describe("structure", () => {
   });
 
   it("keeps a negated non-digit operand undelimited", () => {
-    expect(stringify(q(ast.not(ast.term(ast.exact("apple")))))).toBe("-apple");
-    expect(stringify(q(ast.not(ast.term(ast.number(-5)))))).toBe("--5");
+    expect(format(q(ast.not(ast.term(ast.exact("apple")))))).toBe("-apple");
+    expect(format(q(ast.not(ast.term(ast.number(-5)))))).toBe("--5");
   });
 
   it("renders a group", () => {
-    expect(stringify(q(ast.group([apple, red])))).toBe(
-      "(fruit:apple color:red)",
-    );
+    expect(format(q(ast.group([apple, red])))).toBe("(fruit:apple color:red)");
   });
 
   it("renders a comparison", () => {
     expect(
-      stringify(q(ast.filter("seeds", ast.comparison(">=", ast.number(2))))),
+      format(q(ast.filter("seeds", ast.comparison(">=", ast.number(2))))),
     ).toBe("seeds:>=2");
   });
 
   it("renders a range", () => {
     expect(
-      stringify(
-        q(ast.filter("seeds", ast.range(ast.number(2), ast.number(10)))),
-      ),
+      format(q(ast.filter("seeds", ast.range(ast.number(2), ast.number(10))))),
     ).toBe("seeds:[2 TO 10]");
   });
 
   it("renders a datetime range", () => {
     const from = ast.dateTime(Date.parse("2024-01-01"), "2024-01-01");
     const to = ast.dateTime(Date.parse("2024-12-31"), "2024-12-31");
-    expect(stringify(q(ast.filter("harvested", ast.range(from, to))))).toBe(
+    expect(format(q(ast.filter("harvested", ast.range(from, to))))).toBe(
       "harvested:[@2024-01-01 TO @2024-12-31]",
     );
   });
 
   it("renders a value group", () => {
     expect(
-      stringify(
+      format(
         q(
           ast.filter(
             "fruit",
@@ -232,7 +223,7 @@ describe("structure", () => {
 
   it("renders a negated value", () => {
     expect(
-      stringify(
+      format(
         q(
           ast.filter(
             "fruit",
@@ -245,7 +236,7 @@ describe("structure", () => {
 
   it("renders juxtaposed value-group children with a space", () => {
     expect(
-      stringify(
+      format(
         q(
           ast.filter(
             "fruit",
@@ -270,19 +261,19 @@ describe("precedence", () => {
   const c = ast.term(ast.exact("c"));
 
   it("parenthesizes an OR nested directly inside an AND", () => {
-    expect(stringify(q(ast.and([ast.or([a, b]), c])))).toBe("(a OR b) AND c");
+    expect(format(q(ast.and([ast.or([a, b]), c])))).toBe("(a OR b) AND c");
   });
 
   it("parenthesizes an OR on the right of an AND", () => {
-    expect(stringify(q(ast.and([a, ast.or([b, c])])))).toBe("a AND (b OR c)");
+    expect(format(q(ast.and([a, ast.or([b, c])])))).toBe("a AND (b OR c)");
   });
 
   it("leaves an AND inside an OR unparenthesized", () => {
-    expect(stringify(q(ast.or([ast.and([a, b]), c])))).toBe("a AND b OR c");
+    expect(format(q(ast.or([ast.and([a, b]), c])))).toBe("a AND b OR c");
   });
 
   it("leaves operators unparenthesized as root children", () => {
-    expect(stringify(ast.query([a, ast.or([b, c])]))).toBe("a b OR c");
+    expect(format(ast.query([a, ast.or([b, c])]))).toBe("a b OR c");
   });
 
   it("applies the same rule at the value level", () => {
@@ -290,7 +281,7 @@ describe("precedence", () => {
     const vb = ast.term(ast.exact("b"));
     const vc = ast.term(ast.exact("c"));
     expect(
-      stringify(
+      format(
         q(
           ast.filter(
             "k",
@@ -303,9 +294,9 @@ describe("precedence", () => {
 
   it("re-parses a synthesized-paren tree to the same meaning", () => {
     const built = q(ast.and([ast.or([a, b]), c]));
-    const text = stringify(built);
+    const text = format(built);
     // The reparse gains an explicit GroupNode, so compare rendered forms.
-    expect(stringify(parse(text))).toBe(text);
+    expect(format(parse(text))).toBe(text);
   });
 });
 
@@ -371,12 +362,12 @@ const CORPUS = [
 ];
 
 describe("round trip", () => {
-  it.each(CORPUS)("stringify(parse(%j)) is identity", (source) => {
-    expect(stringify(parse(source))).toBe(source);
+  it.each(CORPUS)("format(parse(%j)) is identity", (source) => {
+    expect(format(parse(source))).toBe(source);
   });
 
   it.each(CORPUS)("parse is stable across a render cycle (%j)", (source) => {
     const once = parse(source);
-    expect(parse(stringify(once))).toEqual(once);
+    expect(parse(format(once))).toEqual(once);
   });
 });

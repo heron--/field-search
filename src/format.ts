@@ -178,6 +178,6 @@ function renderQuery(node: QueryExpr): string {
 /* ------------------------------------------------------------------ */
 
 /** Render a query tree back to string form. */
-export function stringify(node: QueryNode): string {
+export function format(node: QueryNode): string {
   return node.children.map(renderQuery).join(" ");
 }
