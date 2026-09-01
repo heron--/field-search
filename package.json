@@ -62,14 +62,18 @@
     "visual:check": "tsx scripts/shoot.mts",
     "format": "prettier --write ."
   },
-  "dependencies": {
-    "@radix-ui/react-popover": "^1.1.15"
-  },
   "peerDependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
     "react": "^18.2.0 || ^19.0.0",
     "react-dom": "^18.2.0 || ^19.0.0"
   },
+  "peerDependenciesMeta": {
+    "@radix-ui/react-popover": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
     "@types/node": "^26.4.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

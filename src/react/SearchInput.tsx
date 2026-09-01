@@ -25,6 +25,55 @@ import {
   type SuggestionItem,
 } from "./useFieldSearch";
 
+export interface PopoverRootProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children?: React.ReactNode;
+}
+
+export interface PopoverAnchorProps {
+  asChild?: boolean;
+  children?: React.ReactNode;
+}
+
+export interface PopoverPortalProps {
+  container?: HTMLElement | null;
+  children?: React.ReactNode;
+}
+
+export interface PopoverContentProps extends Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  "className"
+> {
+  className?: string;
+  side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+  sideOffset?: number;
+  onOpenAutoFocus?: (event: Event) => void;
+  onCloseAutoFocus?: (event: Event) => void;
+}
+
+/**
+ * The primitive components used to position and render the suggestions
+ * popover. Defaults to an implementation built on `@radix-ui/react-popover`;
+ * pass your own (e.g. built on `floating-ui` or a native `<dialog>`) via
+ * `SearchInputProps.popoverComponents` to render `SearchInput` without
+ * installing Radix at all.
+ */
+export interface PopoverPrimitives {
+  Root: React.ComponentType<PopoverRootProps>;
+  Anchor: React.ComponentType<PopoverAnchorProps>;
+  Portal: React.ComponentType<PopoverPortalProps>;
+  Content: React.ComponentType<PopoverContentProps>;
+}
+
+const defaultPopoverPrimitives: PopoverPrimitives = {
+  Root: Popover.Root,
+  Anchor: Popover.Anchor,
+  Portal: Popover.Portal,
+  Content: Popover.Content,
+};
+
 export interface SearchInputClassNames {
   root?: string;
   field?: string;
@@ -115,10 +164,13 @@ export interface SearchInputProps extends Omit<
   slots?: SearchInputSlots;
   rootProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "children">;
   errorProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "children">;
-  popoverProps?: Omit<
-    React.ComponentPropsWithoutRef<typeof Popover.Content>,
-    "children" | "className"
-  >;
+  popoverProps?: Omit<PopoverContentProps, "children" | "className">;
+  /**
+   * Override the popover primitives used to position and render the
+   * suggestions list. Defaults to `@radix-ui/react-popover`; provide your
+   * own implementation to render `SearchInput` without depending on Radix.
+   */
+  popoverComponents?: PopoverPrimitives;
   /** Portal destination. Defaults to the root so scoped theme tokens inherit. */
   portalContainer?: HTMLElement | null;
 }
@@ -293,6 +345,7 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
       rootProps,
       errorProps,
       popoverProps,
+      popoverComponents,
       portalContainer,
       id: suppliedId,
       dir,
@@ -683,6 +736,12 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
       onCloseAutoFocus,
       ...contentProps
     } = popoverProps ?? {};
+    const {
+      Root: PopoverRoot,
+      Anchor: PopoverAnchor,
+      Portal: PopoverPortal,
+      Content: PopoverContent,
+    } = popoverComponents ?? defaultPopoverPrimitives;
 
     return (
       <Root
@@ -696,13 +755,13 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
         dir={rootProps?.dir ?? dir}
         data-slot="root"
       >
-        <Popover.Root
+        <PopoverRoot
           open={open}
           onOpenChange={(nextOpen) => {
             if (!nextOpen) setDismissed(true);
           }}
         >
-          <Popover.Anchor asChild>
+          <PopoverAnchor asChild>
             <Field
               className={join("fs-field", classNames.field)}
               data-slot="field"
@@ -890,10 +949,10 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
                 <input type="hidden" name={name} value={value} />
               )}
             </Field>
-          </Popover.Anchor>
+          </PopoverAnchor>
 
-          <Popover.Portal container={portalContainer ?? rootRef.current}>
-            <Popover.Content
+          <PopoverPortal container={portalContainer ?? rootRef.current}>
+            <PopoverContent
               {...contentProps}
               className={join("fs-suggestions-wrap", classNames.popover)}
               data-slot="popover"
@@ -924,9 +983,9 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
                 onSelect={choose}
                 onActiveIndexChange={controller.setActiveIndex}
               />
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+            </PopoverContent>
+          </PopoverPortal>
+        </PopoverRoot>
 
         {showError && revealErrors && controller.validation.error && (
           <ErrorSlot

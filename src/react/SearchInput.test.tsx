@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applySelection, readText } from "./selection";
 import {
   SearchInput,
+  type PopoverAnchorProps,
+  type PopoverContentProps,
+  type PopoverPortalProps,
+  type PopoverRootProps,
   type SearchContext,
   type SearchInputProps,
 } from "./SearchInput";
@@ -201,6 +205,50 @@ describe("SearchInput", () => {
     expect(editor.getAttribute("aria-controls")).toBe(listbox?.id);
     expect(editor.getAttribute("aria-activedescendant")).toBe(option?.id);
     expect(option?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("accepts injected popover primitives instead of Radix", () => {
+    const CustomRoot = ({ children }: PopoverRootProps) => (
+      <div data-testid="custom-root">{children}</div>
+    );
+    const CustomAnchor = ({ children }: PopoverAnchorProps) => <>{children}</>;
+    const CustomPortal = ({ children }: PopoverPortalProps) => <>{children}</>;
+    const CustomContent = React.forwardRef<HTMLDivElement, PopoverContentProps>(
+      function CustomContent(
+        {
+          children,
+          side: _side,
+          align: _align,
+          sideOffset: _sideOffset,
+          ...props
+        },
+        ref,
+      ) {
+        return (
+          <div {...props} ref={ref} data-testid="custom-content">
+            {children}
+          </div>
+        );
+      },
+    );
+
+    const { editor } = renderControlled({
+      fields: [{ field: "kind", detail: "text" }],
+      popoverComponents: {
+        Root: CustomRoot,
+        Anchor: CustomAnchor,
+        Portal: CustomPortal,
+        Content: CustomContent,
+      },
+    });
+
+    expect(
+      container.querySelector('[data-testid="custom-root"]'),
+    ).not.toBeNull();
+    const content = container.querySelector('[data-testid="custom-content"]');
+    expect(content).not.toBeNull();
+    const listbox = container.querySelector('[role="listbox"]');
+    expect(editor.getAttribute("aria-controls")).toBe(listbox?.id);
   });
 
   /* ---------------------------------------------------------------- */
