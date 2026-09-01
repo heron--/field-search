@@ -541,8 +541,6 @@ If you restyle chips yourself, the rule to keep is the positioning one above:
 do not give `.fs-chip` a `position`, or the caret disappears behind it. Anything
 needing a containing block inside a chip belongs on `.fs-close-anchor`.
 
-`layout.css` remains as a compatibility alias for `base.css`.
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md), and [docs/testing.md](docs/testing.md)

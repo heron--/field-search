@@ -47,7 +47,6 @@
     },
     "./styles.css": "./dist/styles.css",
     "./base.css": "./dist/base.css",
-    "./layout.css": "./dist/layout.css",
     "./theme.css": "./dist/theme.css"
   },
   "scripts": {

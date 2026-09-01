@@ -32,7 +32,6 @@ for (const file of [
   "dist/react/index.js",
   "dist/react/index.d.ts",
   "dist/base.css",
-  "dist/layout.css",
   "dist/theme.css",
   "dist/styles.css",
 ]) {
