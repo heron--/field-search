@@ -1,5 +1,4 @@
 import * as React from "react";
-import * as Popover from "@radix-ui/react-popover";
 import type { ParseError } from "../parser";
 import { Chip, type ChipClassNames } from "./Chip";
 import { DEV } from "./dev";
@@ -49,16 +48,23 @@ export interface PopoverContentProps extends Omit<
   side?: "top" | "right" | "bottom" | "left";
   align?: "start" | "center" | "end";
   sideOffset?: number;
+  avoidCollisions?: boolean;
+  collisionBoundary?: Element | null | Array<Element | null>;
+  collisionPadding?:
+    number | Partial<Record<"top" | "right" | "bottom" | "left", number>>;
   onOpenAutoFocus?: (event: Event) => void;
   onCloseAutoFocus?: (event: Event) => void;
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
+  onPointerDownOutside?: (event: Event) => void;
 }
 
 /**
  * The primitive components used to position and render the suggestions
- * popover. Defaults to an implementation built on `@radix-ui/react-popover`;
- * pass your own (e.g. built on `floating-ui` or a native `<dialog>`) via
- * `SearchInputProps.popoverComponents` to render `SearchInput` without
- * installing Radix at all.
+ * popover. `SearchInput` has no built-in implementation so that consumers
+ * who don't use the styled popover never pay for `@radix-ui/react-popover`.
+ * Pass `radixPopoverPrimitives` from `field-search/react/radix-popover` to
+ * restore the previous Radix-backed behavior, or your own (e.g. built on
+ * `floating-ui` or a native `<dialog>`).
  */
 export interface PopoverPrimitives {
   Root: React.ComponentType<PopoverRootProps>;
@@ -66,13 +72,6 @@ export interface PopoverPrimitives {
   Portal: React.ComponentType<PopoverPortalProps>;
   Content: React.ComponentType<PopoverContentProps>;
 }
-
-const defaultPopoverPrimitives: PopoverPrimitives = {
-  Root: Popover.Root,
-  Anchor: Popover.Anchor,
-  Portal: Popover.Portal,
-  Content: Popover.Content,
-};
 
 export interface SearchInputClassNames {
   root?: string;
@@ -166,11 +165,12 @@ export interface SearchInputProps extends Omit<
   errorProps?: Omit<React.HTMLAttributes<HTMLDivElement>, "children">;
   popoverProps?: Omit<PopoverContentProps, "children" | "className">;
   /**
-   * Override the popover primitives used to position and render the
-   * suggestions list. Defaults to `@radix-ui/react-popover`; provide your
-   * own implementation to render `SearchInput` without depending on Radix.
+   * The popover primitives used to position and render the suggestions
+   * list. Pass `radixPopoverPrimitives` from
+   * `field-search/react/radix-popover` for the previous Radix-backed
+   * behavior, or your own implementation to avoid depending on Radix.
    */
-  popoverComponents?: PopoverPrimitives;
+  popoverComponents: PopoverPrimitives;
   /** Portal destination. Defaults to the root so scoped theme tokens inherit. */
   portalContainer?: HTMLElement | null;
 }
@@ -741,7 +741,7 @@ export const SearchInput = React.forwardRef<HTMLDivElement, SearchInputProps>(
       Anchor: PopoverAnchor,
       Portal: PopoverPortal,
       Content: PopoverContent,
-    } = popoverComponents ?? defaultPopoverPrimitives;
+    } = popoverComponents;
 
     return (
       <Root

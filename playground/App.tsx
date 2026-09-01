@@ -6,6 +6,7 @@ import {
   type SearchContext,
   type SuggestionItem,
 } from "../src/react";
+import { radixPopoverPrimitives } from "../src/react/radix-popover";
 import { parse } from "../src/parser";
 import { format } from "../src/format";
 import { PRODUCE, type Produce } from "./data";
@@ -257,6 +258,7 @@ export default function App() {
         </div>
         <SearchInput
           id="produce-search"
+          popoverComponents={radixPopoverPrimitives}
           value={query}
           onValueChange={setQuery}
           onContextChange={handleContextChange}

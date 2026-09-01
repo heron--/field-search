@@ -2,7 +2,7 @@ import { copyFile, mkdir } from "node:fs/promises";
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/react/index.ts"],
+  entry: ["src/index.ts", "src/react/index.ts", "src/react/radix-popover.ts"],
   format: ["esm"],
   target: "es2022",
   dts: true,

@@ -22,6 +22,11 @@ later.
 
 React 18.2 and 19 are supported.
 
+`SearchInput` has no built-in popover implementation, so it never forces a
+dependency on you: pass `popoverComponents`, either your own or
+`radixPopoverPrimitives` from `field-search/react/radix-popover`, which
+requires installing `@radix-ui/react-popover` (`^1.1.15`) as well.
+
 ## React quick start
 
 Import the component and its complete default appearance, then control it with
@@ -30,6 +35,7 @@ Import the component and its complete default appearance, then control it with
 ```tsx
 import * as React from "react";
 import { SearchInput, type SearchContext } from "field-search/react";
+import { radixPopoverPrimitives } from "field-search/react/radix-popover";
 import "field-search/styles.css";
 
 const fields = [
@@ -55,6 +61,7 @@ export function InventorySearch() {
       onValueChange={setValue}
       onSearch={runSearch}
       fields={fields}
+      popoverComponents={radixPopoverPrimitives}
     />
   );
 }
@@ -141,6 +148,7 @@ const [submitted, setSubmitted] = React.useState("");
     setSubmitted(value);
     searchWithAst(context.ast); // QueryNode | null
   }}
+  popoverComponents={radixPopoverPrimitives}
 />;
 ```
 
@@ -173,6 +181,7 @@ import {
   type SearchContext,
   type SuggestionItem,
 } from "field-search/react";
+import { radixPopoverPrimitives } from "field-search/react/radix-popover";
 
 export function AsyncSearch() {
   const [value, setValue] = React.useState("");
@@ -216,6 +225,7 @@ export function AsyncSearch() {
       suggestionsLoading={loading}
       loadingMessage="Loading…"
       emptyMessage="No matches"
+      popoverComponents={radixPopoverPrimitives}
     />
   );
 }
@@ -351,19 +361,20 @@ suggestion requests.
 
 ### Rendering and styling
 
-| Prop                   | Type                                                  | Default                                             | Description                                                                                           |
-| ---------------------- | ----------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `className`            | `string`                                              | —                                                   | Class on the component root.                                                                          |
-| `style`                | `CSSProperties`                                       | —                                                   | Inline styles on the component root.                                                                  |
-| `classNames`           | `SearchInputClassNames`                               | `{}`                                                | Classes for root, field, editor, chip, close, operator, paren, popover, suggestions, and error parts. |
-| `chipClassNames`       | `ChipClassNames`                                      | —                                                   | Classes for content within every chip.                                                                |
-| `suggestionClassNames` | `SuggestionClassNames`                                | —                                                   | Classes for content within the suggestion list.                                                       |
-| `renderChip`           | `(segment, { index, hovered, invalid }) => ReactNode` | —                                                   | Replaces a chip's contents. Must render exactly `segment.text`.                                       |
-| `slots`                | `SearchInputSlots`                                    | `div` elements                                      | Replaces the root, field, or error element type.                                                      |
-| `rootProps`            | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional root attributes.                                                                           |
-| `errorProps`           | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional error attributes.                                                                          |
-| `popoverProps`         | Radix `Popover.Content` props                         | `{ side: "bottom", align: "start", sideOffset: 6 }` | Controls popover placement and behavior.                                                              |
-| `portalContainer`      | `HTMLElement \| null`                                 | Component root                                      | Portal destination; the root preserves scoped theme variables.                                        |
+| Prop                   | Type                                                  | Default                                             | Description                                                                                                                                                                                |
+| ---------------------- | ----------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `className`            | `string`                                              | —                                                   | Class on the component root.                                                                                                                                                               |
+| `style`                | `CSSProperties`                                       | —                                                   | Inline styles on the component root.                                                                                                                                                       |
+| `classNames`           | `SearchInputClassNames`                               | `{}`                                                | Classes for root, field, editor, chip, close, operator, paren, popover, suggestions, and error parts.                                                                                      |
+| `chipClassNames`       | `ChipClassNames`                                      | —                                                   | Classes for content within every chip.                                                                                                                                                     |
+| `suggestionClassNames` | `SuggestionClassNames`                                | —                                                   | Classes for content within the suggestion list.                                                                                                                                            |
+| `renderChip`           | `(segment, { index, hovered, invalid }) => ReactNode` | —                                                   | Replaces a chip's contents. Must render exactly `segment.text`.                                                                                                                            |
+| `slots`                | `SearchInputSlots`                                    | `div` elements                                      | Replaces the root, field, or error element type.                                                                                                                                           |
+| `rootProps`            | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional root attributes.                                                                                                                                                                |
+| `errorProps`           | `HTMLAttributes<HTMLDivElement>`                      | —                                                   | Additional error attributes.                                                                                                                                                               |
+| `popoverProps`         | `PopoverContentProps`                                 | `{ side: "bottom", align: "start", sideOffset: 6 }` | Positioning and behavior props forwarded to the popover content, including `collisionPadding`, `collisionBoundary`, `avoidCollisions`, `onEscapeKeyDown`, and `onPointerDownOutside`.      |
+| `popoverComponents`    | `PopoverPrimitives`                                   | required                                            | The `Root`/`Anchor`/`Portal`/`Content` primitives that position and render the popover. Pass `radixPopoverPrimitives` from `field-search/react/radix-popover`, or your own implementation. |
+| `portalContainer`      | `HTMLElement \| null`                                 | Component root                                      | Portal destination; the root preserves scoped theme variables.                                                                                                                             |
 
 ## Headless composition
 

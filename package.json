@@ -45,6 +45,11 @@
       "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
     },
+    "./react/radix-popover": {
+      "types": "./dist/react/radix-popover.d.ts",
+      "import": "./dist/react/radix-popover.js",
+      "default": "./dist/react/radix-popover.js"
+    },
     "./styles.css": "./dist/styles.css",
     "./base.css": "./dist/base.css",
     "./layout.css": "./dist/layout.css",

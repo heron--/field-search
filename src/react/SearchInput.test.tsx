@@ -14,6 +14,7 @@ import {
   type SearchContext,
   type SearchInputProps,
 } from "./SearchInput";
+import { radixPopoverPrimitives } from "./radix-popover";
 
 vi.mock("@radix-ui/react-popover", async () => {
   const React = await import("react");
@@ -89,6 +90,7 @@ describe("SearchInput", () => {
       return (
         <SearchInput
           aria-label="Query"
+          popoverComponents={radixPopoverPrimitives}
           {...props}
           ref={ref}
           value={value}
