@@ -50,7 +50,7 @@ Initial public release.
 
 ### Added
 
-- Fielded-query language: parser (`parse`), formatter (`format`), and AST
+- Fielded-query language: parser (`parse`), formatter (`stringify`), and AST
   types/builders for terms, filters, comparisons, ranges, and boolean
   groups.
 - React search-input primitives: `SearchInput`, `Chip`, `Suggestions`,

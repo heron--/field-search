@@ -1,3 +1,3 @@
 export * from "./ast";
-export { parse } from "./parser";
+export { parse, ParseError } from "./parser";
 export { format } from "./format";
