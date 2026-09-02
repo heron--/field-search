@@ -684,4 +684,44 @@ describe("SearchInput", () => {
       }),
     );
   });
+
+  /* ---------------------------------------------------------------- */
+  /* renderChip drift guard                                           */
+  /* ---------------------------------------------------------------- */
+
+  describe("renderChip drift guard", () => {
+    it("logs a drift error when renderChip drops characters", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        renderControlled({
+          value: "kind:fruit",
+          renderChip: (segment) => segment.text.slice(0, -1),
+        });
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("renders %o but the query is %o"),
+          "kind:frui",
+          "kind:fruit",
+        );
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("does not log when renderChip preserves the segment text", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        renderControlled({
+          value: "kind:fruit",
+          renderChip: (segment) => segment.text,
+        });
+
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+  });
 });
