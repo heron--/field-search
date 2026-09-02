@@ -29,15 +29,30 @@ the tracked work required to reach 1.0.0.
 
 ## [Unreleased]
 
-Changes since 0.1.0, targeted at 1.0.0 (tracked in #13).
+Changes since 0.1.0, targeted at 0.2.0 (part of the 1.0.0 readiness work
+tracked in #13).
 
 ### Changed
 
 - **Breaking:** Renamed `stringify` to `format`. `format()` is the
   AST-to-string counterpart of `parse()`; `stringify` collided with
   `JSON.stringify` in imports.
+- **Breaking:** `SearchInputProps.popoverComponents` is now required.
+  `SearchInput` has no built-in popover implementation and no longer imports
+  `@radix-ui/react-popover`, so importing `field-search/react` never requires
+  Radix to be installed. Pass `radixPopoverPrimitives` from the new
+  `field-search/react/radix-popover` entry point to restore the previous
+  Radix-backed popover, or supply your own implementation.
+  `@radix-ui/react-popover` moved from `dependencies` to an optional
+  `peerDependency`.
 - Clarified the ESM package exports (`package.json` `exports` map) and added
   a package-shape check script.
+
+### Removed
+
+- **Breaking:** Removed the deprecated `layout.css` compatibility alias
+  (shipped in 0.1.0 as an alias for `base.css`). Import `base.css` or
+  `styles.css` instead.
 
 ### Fixed
 
