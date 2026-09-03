@@ -50,7 +50,6 @@ for (const file of [
   "dist/react/radix-popover.js",
   "dist/react/radix-popover.d.ts",
   "dist/base.css",
-  "dist/layout.css",
   "dist/theme.css",
   "dist/styles.css",
 ]) {
