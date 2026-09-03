@@ -2,6 +2,7 @@ import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { SearchInput } from "./SearchInput";
+import { radixPopoverPrimitives } from "./radix-popover";
 
 describe("SearchInput SSR", () => {
   it("renders without accessing browser-only globals", () => {
@@ -10,6 +11,7 @@ describe("SearchInput SSR", () => {
         aria-label="Query"
         value="kind:fruit"
         onValueChange={() => {}}
+        popoverComponents={radixPopoverPrimitives}
       />,
     );
 

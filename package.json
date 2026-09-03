@@ -45,6 +45,11 @@
       "import": "./dist/react/index.js",
       "default": "./dist/react/index.js"
     },
+    "./react/radix-popover": {
+      "types": "./dist/react/radix-popover.d.ts",
+      "import": "./dist/react/radix-popover.js",
+      "default": "./dist/react/radix-popover.js"
+    },
     "./styles.css": "./dist/styles.css",
     "./base.css": "./dist/base.css",
     "./layout.css": "./dist/layout.css",
@@ -63,14 +68,18 @@
     "visual:check": "tsx scripts/shoot.mts",
     "format": "prettier --write ."
   },
-  "dependencies": {
-    "@radix-ui/react-popover": "^1.1.15"
-  },
   "peerDependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
     "react": "^18.2.0 || ^19.0.0",
     "react-dom": "^18.2.0 || ^19.0.0"
   },
+  "peerDependenciesMeta": {
+    "@radix-ui/react-popover": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@radix-ui/react-popover": "^1.1.15",
     "@types/node": "^26.4.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
