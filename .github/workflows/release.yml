@@ -34,9 +34,17 @@ jobs:
       - name: Browser checks
         run: npm run visual:check
 
-  publish:
+  stage:
     needs: check
     runs-on: ubuntu-latest
+    # Stages the tarball via npm trusted publishing (OIDC): the runner exchanges
+    # this short-lived token for staging rights, so there is no npm token to
+    # store or rotate. The trusted publisher on npmjs.com grants stage-only
+    # access, so a compromised workflow cannot make a version live; a maintainer
+    # approves the staged version with 2FA (`npm stage approve <id>`).
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -46,10 +54,11 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Staged publishing landed in npm 11.15.0; Node 22 still bundles npm 10.
+      - run: npm install -g npm@latest
+
       - run: npm ci
 
       - run: npm run build
 
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm stage publish
